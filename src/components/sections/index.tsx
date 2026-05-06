@@ -8,6 +8,9 @@ import { SocialSecurity } from "./SocialSecurity";
 import { Results } from "./Results";
 import { MonteCarlo } from "./MonteCarlo";
 import { Estate } from "./Estate";
+import { SequenceRisk } from "./SequenceRisk";
+import { AssetLocation } from "./AssetLocation";
+import { Comparison } from "./Comparison";
 
 export function SectionRenderer({ id }: { id: SectionId }) {
   switch (id) {
@@ -33,12 +36,12 @@ export function SectionRenderer({ id }: { id: SectionId }) {
     case "monte-carlo":
       return <MonteCarlo />;
     case "sequence-risk":
-      return <SectionStub title="Sequence-of-Returns Risk" description="Coming soon." />;
+      return <SequenceRisk />;
     case "asset-location":
-      return <SectionStub title="Asset Location" description="Coming soon." />;
+      return <AssetLocation />;
     case "estate":
       return <Estate />;
     case "comparison":
-      return <SectionStub title="Comparison" description="Coming soon." />;
+      return <Comparison />;
   }
 }

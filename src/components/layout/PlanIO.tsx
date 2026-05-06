@@ -10,7 +10,14 @@ export function PlanIO() {
   const [error, setError] = useState<string | null>(null);
 
   return (
-    <div className="flex flex-wrap gap-2 items-center">
+    <div className="no-print flex flex-wrap gap-2 items-center">
+      <button
+        type="button"
+        className="btn-ghost text-xs border border-border"
+        onClick={() => window.print()}
+      >
+        Print summary
+      </button>
       <button
         type="button"
         className="btn-ghost text-xs border border-border"

@@ -62,11 +62,46 @@
 @media print {
   :root {
     --color-bg: #ffffff;
+    --color-surface: #ffffff;
+    --color-surface-2: #ffffff;
     --color-fg: #000000;
     --color-border: #000000;
-    --color-muted: #000000;
+    --color-border-strong: #000000;
+    --color-muted: #1a1a1a;
+    --color-subtle: #4a4a4a;
+    --color-accent: #000000;
+    --color-positive: #000000;
+    --color-negative: #000000;
   }
   .no-print {
     display: none !important;
+  }
+  body {
+    font-size: 10px;
+  }
+  main {
+    overflow: visible !important;
+  }
+  .card {
+    border-color: #000 !important;
+    box-shadow: none !important;
+    page-break-inside: avoid;
+    padding: 12px !important;
+  }
+  /* Chart containers use a different stroke for B&W. */
+  .recharts-cartesian-grid line {
+    stroke: #999 !important;
+  }
+  .recharts-tooltip-wrapper {
+    display: none !important;
+  }
+  table {
+    page-break-inside: auto;
+  }
+  tr {
+    page-break-inside: avoid;
+  }
+  thead {
+    display: table-header-group;
   }
 }

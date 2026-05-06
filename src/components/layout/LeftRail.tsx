@@ -6,7 +6,7 @@ export function LeftRail() {
   const active = useUIStore((s) => s.activeSection);
   const setActive = useUIStore((s) => s.setActiveSection);
   return (
-    <aside className="hidden md:flex md:flex-col md:w-56 lg:w-60 shrink-0 border-r border-border bg-surface">
+    <aside className="no-print hidden md:flex md:flex-col md:w-56 lg:w-60 shrink-0 border-r border-border bg-surface">
       <div className="px-5 py-5 flex items-center justify-between">
         <div>
           <div className="text-sm font-semibold tracking-tight">Retirement</div>

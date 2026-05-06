@@ -6,6 +6,7 @@ import { AssetGrowthChart } from "@/components/charts/AssetGrowthChart";
 import { IncomeVsExpenseChart } from "@/components/charts/IncomeVsExpenseChart";
 import { TaxStackedAreaChart } from "@/components/charts/TaxStackedAreaChart";
 import { SegmentedControl } from "@/components/inputs/SegmentedControl";
+import { Warnings } from "@/components/layout/Warnings";
 
 export function Results() {
   const rows = useDisplayProjection();
@@ -45,6 +46,8 @@ export function Results() {
           ]}
         />
       </header>
+
+      <Warnings />
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Stat label="Assets at retirement" value={formatCompact(

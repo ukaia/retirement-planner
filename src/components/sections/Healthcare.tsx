@@ -3,6 +3,7 @@ import { NumberInput } from "@/components/inputs/NumberInput";
 import { SegmentedControl } from "@/components/inputs/SegmentedControl";
 import { Toggle } from "@/components/inputs/Toggle";
 import { useStore } from "@/state/store";
+import { Term } from "@/components/inputs/Term";
 
 export function Healthcare() {
   const plan = useStore((s) => s.plan);
@@ -46,8 +47,9 @@ export function Healthcare() {
           />
         </div>
         <div className="text-[11px] text-subtle">
-          Part B base 2026: $202.90/mo. Plan G default: ~$170/mo. IRMAA surcharges
-          apply automatically when MAGI two years prior crosses thresholds.
+          Part B base 2026: $202.90/mo. Plan G default: ~$170/mo.{" "}
+          <Term k="irmaa">IRMAA</Term> surcharges apply automatically when{" "}
+          <Term k="magi">MAGI</Term> two years prior crosses thresholds.
         </div>
       </Card>
 

@@ -9,7 +9,7 @@ export function RightRailSummary() {
   const setDisplayMode = useStore((s) => s.setDisplayMode);
 
   return (
-    <aside className="hidden xl:flex xl:flex-col xl:w-80 shrink-0 border-l border-border bg-surface">
+    <aside className="no-print hidden xl:flex xl:flex-col xl:w-80 shrink-0 border-l border-border bg-surface">
       <div className="px-5 py-5">
         <div className="flex items-center justify-between">
           <div>

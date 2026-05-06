@@ -7,6 +7,7 @@ import { useStore } from "@/state/store";
 import type { FilingStatus, TaxYear } from "@/lib/tax-constants";
 import { INFLATION_PRESETS } from "@/lib/inflation";
 import { PlanIO } from "@/components/layout/PlanIO";
+import { Warnings } from "@/components/layout/Warnings";
 
 const FILING_OPTIONS: { value: FilingStatus; label: string }[] = [
   { value: "single", label: "Single" },
@@ -56,6 +57,8 @@ export function Profile() {
         </div>
         <PlanIO />
       </header>
+
+      <Warnings />
 
       <Card>
         <div className="flex items-center justify-between">

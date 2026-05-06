@@ -14,7 +14,7 @@ export function MobileTabs() {
   const setActive = useUIStore((s) => s.setActiveSection);
   const primary = SECTIONS.filter((s) => (PRIMARY_IDS as readonly string[]).includes(s.id));
   return (
-    <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 border-t border-border bg-surface/95 backdrop-blur">
+    <nav className="no-print md:hidden fixed bottom-0 inset-x-0 z-30 border-t border-border bg-surface/95 backdrop-blur">
       <div className="grid grid-cols-5">
         {primary.map((s) => {
           const isActive = active === s.id;

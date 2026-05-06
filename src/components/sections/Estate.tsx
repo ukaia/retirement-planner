@@ -6,6 +6,7 @@ import { useProjection } from "@/state/selectors";
 import { computeEstate, gifting } from "@/lib/estate";
 import { formatCompact, formatCurrency } from "@/lib/formatters";
 import { useState } from "react";
+import { Term } from "@/components/inputs/Term";
 
 export function Estate() {
   const plan = useStore((s) => s.plan);
@@ -73,9 +74,12 @@ export function Estate() {
 
       <Card title="Stretch IRA (for heirs)">
         <p className="text-sm text-muted">
-          Under SECURE Act, most non-spouse beneficiaries must drain inherited IRAs within 10 years. Heirs in
-          high-tax-bracket years can face large income-tax bills. Consider a Roth conversion ladder if leaving
-          significant traditional balances to non-spouse heirs.
+          Under SECURE Act, most non-spouse beneficiaries must drain inherited IRAs within 10 years
+          (the new <Term k="stretchIra">stretch IRA</Term> limit). Heirs in high-tax-bracket years
+          can face large income-tax bills. Consider a{" "}
+          <Term k="rothConversion">Roth conversion</Term> ladder if leaving significant traditional
+          balances to non-spouse heirs. Non-retirement assets get a{" "}
+          <Term k="stepUpBasis">step-up in basis</Term> at death.
         </p>
       </Card>
     </section>

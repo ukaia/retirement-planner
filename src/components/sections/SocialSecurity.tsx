@@ -6,6 +6,7 @@ import { useStore } from "@/state/store";
 import { benefitAtClaimAge, buildClaimHeatmap } from "@/lib/social-security";
 import { formatCurrency, formatCompact } from "@/lib/formatters";
 import { useMemo } from "react";
+import { Term } from "@/components/inputs/Term";
 
 export function SocialSecurity() {
   const plan = useStore((s) => s.plan);
@@ -45,11 +46,12 @@ export function SocialSecurity() {
       <header>
         <h1 className="text-xl font-semibold tracking-tight">Social Security</h1>
         <p className="mt-1 text-sm text-muted max-w-prose">
-          Enter your Primary Insurance Amount (PIA) at FRA. Get this from{" "}
+          Enter your <Term k="pia">PIA</Term> at <Term k="fra">FRA</Term>. Get this from{" "}
           <a className="underline underline-offset-2" href="https://ssa.gov/myaccount" target="_blank" rel="noreferrer">
             ssa.gov/myaccount
           </a>
-          . Adjust your claim age to see lifetime benefit changes.
+          . Adjust your claim age to see lifetime benefit changes;{" "}
+          <Term k="drc">delayed retirement credits</Term> add 8% per year past FRA.
         </p>
       </header>
 

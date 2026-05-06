@@ -104,4 +104,17 @@
   thead {
     display: table-header-group;
   }
+  .screen-only {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  @page {
+    size: letter;
+    margin: 0.5in;
+  }
+}
+.print-only {
+  display: none;
 }

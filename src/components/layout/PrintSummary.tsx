@@ -1,0 +1,250 @@
+import { useStore } from "@/state/store";
+import { useAtRetirementSummary, useProjection } from "@/state/selectors";
+import { computeSafeSpend, computeSavingsGap } from "@/lib/safe-spend";
+import { effectiveReturns } from "@/lib/projection";
+import { formatCompact, formatCurrency, formatPercent } from "@/lib/formatters";
+
+export function PrintSummary() {
+  const plan = useStore((s) => s.plan);
+  const summary = useAtRetirementSummary();
+  const rows = useProjection();
+  const returns = effectiveReturns(plan);
+
+  if (!summary || rows.length === 0) {
+    return (
+      <div className="print-only p-8 text-sm">
+        <h1 className="text-xl font-semibold">Retirement Plan Summary</h1>
+        <p className="mt-3">Add inputs to populate.</p>
+      </div>
+    );
+  }
+
+  // Always use drain-zero for the printed summary so it renders deterministically
+  // without requiring an MC pass.
+  const liveSafePlan = { ...plan, safeSpend: { ...plan.safeSpend, method: "drain-zero" as const } };
+  const safe = computeSafeSpend(liveSafePlan);
+  const goal = plan.targetAnnualSpend ?? 0;
+  const gap = goal > 0 ? computeSavingsGap({ plan: liveSafePlan, safe, goalToday: goal }) : null;
+
+  // Pick a sparse set of milestone rows: retirement, +5y, +10y, +15y, +20y, last.
+  const milestones = pickMilestones(rows);
+
+  const p1Name = plan.profile.person1.name ?? "Person 1";
+  const p2 = plan.profile.person2;
+
+  const totalLifetimeTax = rows.reduce((s, r) => s + r.totalTax, 0);
+  const yearsWithShortfall = rows.filter((r) => r.shortfall > 0).length;
+
+  return (
+    <div className="print-only" style={{ color: "#000", background: "#fff", padding: "0" }}>
+      <header style={{ borderBottom: "2px solid #000", paddingBottom: 8, marginBottom: 12 }}>
+        <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Retirement Plan Summary</h1>
+        <div style={{ fontSize: 10, color: "#444", marginTop: 2 }}>
+          Generated {new Date().toLocaleDateString()} · State: {plan.profile.state} ·
+          Filing: {plan.profile.filingStatus.toUpperCase()} · Tax year: {plan.profile.taxYear}
+        </div>
+      </header>
+
+      <Section title="Profile">
+        <Grid cols={2}>
+          <KV
+            label={p1Name}
+            value={`Born ${plan.profile.person1.birthYear} · retire age ${plan.profile.person1.retirementAge} · plan to ${plan.profile.person1.longevityAge}`}
+          />
+          {p2 ? (
+            <KV
+              label={p2.name ?? "Person 2"}
+              value={`Born ${p2.birthYear} · retire age ${p2.retirementAge} · plan to ${p2.longevityAge}`}
+            />
+          ) : null}
+          <KV
+            label="Inflation"
+            value={formatPercent(plan.profile.inflation)}
+          />
+          <KV
+            label="Salary growth"
+            value={`${formatPercent(plan.profile.person1.salaryGrowth)}${
+              p2 ? ` / ${formatPercent(p2.salaryGrowth)}` : ""
+            }`}
+          />
+        </Grid>
+      </Section>
+
+      <Section title="At retirement">
+        <Grid cols={4}>
+          <KV
+            label="Year / age"
+            value={`${summary.yearOfRetirement} · age ${summary.ageAtRetirement}`}
+          />
+          <KV label="Total assets" value={formatCompact(summary.totalAssets)} />
+          <KV
+            label="Monthly income"
+            value={formatCurrency(summary.monthlyIncome, { whole: true })}
+          />
+          <KV
+            label="Monthly expense"
+            value={formatCurrency(summary.monthlyExpense, { whole: true })}
+          />
+        </Grid>
+      </Section>
+
+      <Section title="Portfolio (at retirement)">
+        <Grid cols={4}>
+          <KV label="Taxable" value={formatCompact(rows[0].taxableBalance)} />
+          <KV label="Traditional" value={formatCompact(rows[0].traditionalBalance)} />
+          <KV label="Roth" value={formatCompact(rows[0].rothBalance)} />
+          <KV label="HSA" value={formatCompact(rows[0].hsaBalance)} />
+          <KV label="Real estate" value={formatCompact(rows[0].realEstateValue)} />
+          <KV label="Other" value={formatCompact(rows[0].otherAssetsValue)} />
+          <KV label="SS PIA p1" value={formatCompact(plan.socialSecurity.person1.pia * 12)} />
+          {plan.socialSecurity.person2 ? (
+            <KV
+              label="SS PIA p2"
+              value={formatCompact(plan.socialSecurity.person2.pia * 12)}
+            />
+          ) : null}
+        </Grid>
+      </Section>
+
+      <Section title="Return assumptions (weighted)">
+        <Grid cols={4}>
+          <KV label="Taxable" value={returns.taxable === null ? "—" : formatPercent(returns.taxable)} />
+          <KV
+            label="Traditional"
+            value={returns.traditional === null ? "—" : formatPercent(returns.traditional)}
+          />
+          <KV label="Roth" value={returns.roth === null ? "—" : formatPercent(returns.roth)} />
+          <KV label="HSA" value={returns.hsa === null ? "—" : formatPercent(returns.hsa)} />
+        </Grid>
+      </Section>
+
+      <Section title="Sustainability">
+        <Grid cols={4}>
+          <KV
+            label="Safe spend (today's $, drain-zero)"
+            value={formatCurrency(safe.safeSpendToday, { whole: true })}
+          />
+          <KV
+            label="Goal (today's $)"
+            value={goal > 0 ? formatCurrency(goal, { whole: true }) : "—"}
+          />
+          <KV
+            label="Extra savings / mo"
+            value={
+              gap
+                ? gap.requiredAnnualContribution > 0
+                  ? formatCurrency(gap.requiredAnnualContribution / 12, { whole: true })
+                  : "On track"
+                : "—"
+            }
+          />
+          <KV
+            label="Years with shortfall"
+            value={String(yearsWithShortfall)}
+          />
+        </Grid>
+      </Section>
+
+      <Section title="Year-by-year (milestones)">
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 9 }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid #000", textAlign: "left" }}>
+              <Th>Year</Th>
+              <Th>Age</Th>
+              <Th>Income</Th>
+              <Th>Spend</Th>
+              <Th>Tax</Th>
+              <Th>Trad</Th>
+              <Th>Roth</Th>
+              <Th>Taxable</Th>
+              <Th>Estate</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {milestones.map((r) => (
+              <tr key={r.year} style={{ borderBottom: "1px solid #999" }}>
+                <Td>{r.year}</Td>
+                <Td>{r.p1Age}</Td>
+                <Td>
+                  {formatCompact(
+                    r.wages + r.ssP1 + r.ssP2 + r.pensions + r.annuities + r.rentalNet + r.partTime,
+                  )}
+                </Td>
+                <Td>{formatCompact(r.expensesTotal)}</Td>
+                <Td>{formatCompact(r.totalTax)}</Td>
+                <Td>{formatCompact(r.traditionalBalance)}</Td>
+                <Td>{formatCompact(r.rothBalance)}</Td>
+                <Td>{formatCompact(r.taxableBalance)}</Td>
+                <Td>{formatCompact(r.estateValue)}</Td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Section>
+
+      <Section title="Bottom line">
+        <Grid cols={3}>
+          <KV label="Lifetime tax" value={formatCompact(totalLifetimeTax)} />
+          <KV label="Final estate" value={formatCompact(rows[rows.length - 1].estateValue)} />
+          <KV label="Years modeled" value={String(rows.length)} />
+        </Grid>
+      </Section>
+
+      <footer style={{ marginTop: 16, paddingTop: 8, borderTop: "1px solid #000", fontSize: 8, color: "#444" }}>
+        Estimates only. Not financial, tax, or legal advice. Real returns, taxes,
+        healthcare costs, and life events will differ. Verify all figures with a
+        qualified professional before acting.
+      </footer>
+    </div>
+  );
+}
+
+type Row = ReturnType<typeof useProjection>[number];
+
+function pickMilestones(rows: Row[]): Row[] {
+  if (rows.length <= 7) return rows;
+  const indices = [0];
+  for (const offset of [5, 10, 15, 20, 25, 30]) {
+    if (offset < rows.length - 1) indices.push(offset);
+  }
+  indices.push(rows.length - 1);
+  return Array.from(new Set(indices)).sort((a, b) => a - b).map((i) => rows[i]);
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section style={{ marginBottom: 10, pageBreakInside: "avoid" }}>
+      <h2 style={{ fontSize: 11, fontWeight: 700, margin: "0 0 4px 0", borderBottom: "1px solid #000", paddingBottom: 2 }}>
+        {title}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+function Grid({ cols, children }: { cols: 2 | 3 | 4; children: React.ReactNode }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 6 }}>
+      {children}
+    </div>
+  );
+}
+
+function KV({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ borderLeft: "2px solid #000", paddingLeft: 6 }}>
+      <div style={{ fontSize: 8, color: "#444", textTransform: "uppercase", letterSpacing: 0.4 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 10, fontFamily: "ui-monospace, monospace" }}>{value}</div>
+    </div>
+  );
+}
+
+function Th({ children }: { children: React.ReactNode }) {
+  return <th style={{ padding: "3px 4px", fontWeight: 600 }}>{children}</th>;
+}
+
+function Td({ children }: { children: React.ReactNode }) {
+  return <td style={{ padding: "2px 4px", fontFamily: "ui-monospace, monospace" }}>{children}</td>;
+}

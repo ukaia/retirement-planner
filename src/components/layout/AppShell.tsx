@@ -3,7 +3,6 @@ import { LeftRail } from "./LeftRail";
 import { RightRailSummary } from "./RightRailSummary";
 import { MobileTabs } from "./MobileTabs";
 import { useApplyTheme } from "./ThemeToggle";
-import { DisclaimerFooter } from "./Disclaimer";
 
 export function AppShell({ children }: { children: ReactNode }) {
   useApplyTheme();
@@ -14,7 +13,6 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="max-w-3xl mx-auto px-5 py-6 md:px-8 md:py-10">
           {children}
         </div>
-        <DisclaimerFooter />
       </main>
       <RightRailSummary />
       <MobileTabs />

@@ -8,7 +8,7 @@ import type { FilingStatus, TaxYear } from "@/lib/tax-constants";
 import { INFLATION_PRESETS } from "@/lib/inflation";
 import { PlanIO } from "@/components/layout/PlanIO";
 import { Warnings } from "@/components/layout/Warnings";
-import { DisclaimerCard } from "@/components/layout/Disclaimer";
+import { DisclaimerFooter } from "@/components/layout/Disclaimer";
 
 const FILING_OPTIONS: { value: FilingStatus; label: string }[] = [
   { value: "single", label: "Single" },
@@ -266,7 +266,7 @@ export function Profile() {
         </div>
       </Card>
 
-      <DisclaimerCard />
+      <DisclaimerFooter />
     </section>
   );
 }

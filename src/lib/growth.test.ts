@@ -123,6 +123,34 @@ describe("accumulateToRetirement", () => {
     expect(r.balanceByAsset.h1).toBeCloseTo(500_000 * Math.pow(1.035, 19), 0);
   });
 
+  test("split retirement: later-retiring spouse's assets cut at earlier retire year", () => {
+    const plan = basePlan();
+    // p1 retires at 65; add p2 who retires at 70.
+    plan.profile.mode = "couple";
+    plan.profile.person2 = {
+      birthYear: 1980,
+      retirementAge: 70,
+      currentSalary: 0,
+      salaryGrowth: 0.03,
+      longevityAge: 95,
+    };
+    plan.assets = [
+      {
+        id: "p2-bro",
+        owner: "p2",
+        category: "brokerage",
+        balance: 100_000,
+        monthlyContribution: 0,
+        costBasis: 100_000,
+        tier: { tier: "growth-income" },
+      },
+    ];
+    const r = accumulateToRetirement(plan);
+    // p1Age=46, p2Age=46. min(65-46, 70-46)=19 years. Should compound 19 years, not 24.
+    const expected19 = 100_000 * Math.pow(1 + 0.0962 / 12, 12 * 19);
+    expect(r.balanceByAsset["p2-bro"]).toBeCloseTo(expected19, -1);
+  });
+
   test("401(k) with employee + employer match grows from salary", () => {
     const plan = basePlan();
     plan.assets = [

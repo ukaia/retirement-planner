@@ -332,6 +332,37 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
       }
     }
 
+    // Overlap-year contributions: for couples with split retirement, the still-working
+    // spouse keeps contributing to their accounts during years one spouse has retired
+    // and the other hasn't. accumulateToRetirement stops at projectionStartYear, so we
+    // top up here. Added after this year's growth (slight under-count for the year
+    // contributed; balances out across years).
+    for (const asset of plan.assets) {
+      const ownerRetireY =
+        asset.owner === "p2" && p2RetireYear !== null ? p2RetireYear : p1RetireYear;
+      if (year >= ownerRetireY) continue;
+      const contribution = preRetirementContribution(asset, year, accum.salaryByYear);
+      if (contribution === 0) continue;
+      switch (asset.category) {
+        case "trad-401k":
+        case "trad-ira":
+        case "sep-ira":
+          buckets.traditional += contribution;
+          break;
+        case "roth-401k":
+        case "roth-ira":
+          buckets.roth += contribution;
+          break;
+        case "hsa":
+          buckets.hsa += contribution;
+          break;
+        case "brokerage":
+          buckets.taxable.balance += contribution;
+          buckets.taxable.basis += contribution;
+          break;
+      }
+    }
+
     // Helper: liquidate one real-estate property. Returns the LTCG gain (after Section 121 if primary).
     const liquidateOne = (
       id: string,
@@ -698,6 +729,37 @@ function computeSsBenefit(args: {
   let annual = monthlyNow * 12;
   if (args.isSurvivor && args.deceasedBenefit > annual) annual = args.deceasedBenefit;
   return annual;
+}
+
+/**
+ * Annual contribution to an investable asset for a given year, mirroring the
+ * accumulation-phase logic in growth.ts. Used by projection.ts to credit the
+ * still-working spouse during split-retirement overlap years.
+ */
+function preRetirementContribution(
+  asset: Asset,
+  year: number,
+  salaryByYear: { p1: Record<number, number>; p2: Record<number, number> },
+): number {
+  switch (asset.category) {
+    case "trad-401k":
+    case "roth-401k": {
+      const ownerSalary =
+        asset.owner === "p2" ? salaryByYear.p2[year] ?? 0 : salaryByYear.p1[year] ?? 0;
+      return (
+        ownerSalary * ((asset.contributionPct ?? 0) + (asset.employerMatchPct ?? 0))
+      );
+    }
+    case "trad-ira":
+    case "roth-ira":
+    case "sep-ira":
+    case "hsa":
+      return asset.annualContribution ?? 0;
+    case "brokerage":
+      return (asset.monthlyContribution ?? 0) * 12;
+    default:
+      return 0;
+  }
 }
 
 function computeExpenses(

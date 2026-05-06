@@ -72,18 +72,21 @@ export function accumulateToRetirement(plan: Plan): AccumulationResult {
     }
   }
 
-  // Each asset gets compounded year-by-year from baseYear to the owner's retirement year.
-  for (const asset of plan.assets) {
-    const ownerRetireYear =
-      asset.owner === "p2" && p2RetireAge !== null && p2Age !== null
-        ? baseYear + (p2RetireAge - p2Age)
-        : baseYear + (p1RetireAge - p1Age);
+  // Stop accumulation at the EARLIER of the two retire years (the projection's
+  // start year). For couples with split retirement, projection.ts handles the
+  // still-working spouse's contributions during the overlap. Avoids
+  // double-counting growth on the later-retiring spouse's assets.
+  const cutoffYears =
+    p2Age !== null && p2RetireAge !== null
+      ? Math.max(0, Math.min(p1RetireAge - p1Age, p2RetireAge - p2Age))
+      : Math.max(0, p1RetireAge - p1Age);
 
+  // Each asset gets compounded year-by-year from baseYear to the projection start.
+  for (const asset of plan.assets) {
     if (asset.category === "real-estate") {
       // Appreciation per year, no contributions.
       let value = asset.marketValue;
-      const yearsToRetire = Math.max(0, ownerRetireYear - baseYear);
-      for (let i = 0; i < yearsToRetire; i++) value *= 1 + asset.appreciation;
+      for (let i = 0; i < cutoffYears; i++) value *= 1 + asset.appreciation;
       balanceByAsset[asset.id] = value;
       basisByAsset[asset.id] = asset.basis > 0 ? asset.basis : asset.marketValue;
       continue;
@@ -92,8 +95,7 @@ export function accumulateToRetirement(plan: Plan): AccumulationResult {
     if (asset.category === "other") {
       const ret = asset.expectedReturn ?? asset.appreciation ?? 0;
       let value = asset.balance;
-      const yearsToRetire = Math.max(0, ownerRetireYear - baseYear);
-      for (let i = 0; i < yearsToRetire; i++) value *= 1 + ret;
+      for (let i = 0; i < cutoffYears; i++) value *= 1 + ret;
       balanceByAsset[asset.id] = value;
       basisByAsset[asset.id] = asset.costBasis ?? asset.balance;
       continue;
@@ -106,10 +108,7 @@ export function accumulateToRetirement(plan: Plan): AccumulationResult {
 
     let yearAge =
       asset.owner === "p2" && p2Age !== null ? p2Age : p1Age;
-    const yearsToRetire =
-      asset.owner === "p2" && p2RetireAge !== null && p2Age !== null
-        ? Math.max(0, p2RetireAge - p2Age)
-        : Math.max(0, p1RetireAge - p1Age);
+    const yearsToRetire = cutoffYears;
 
     for (let i = 0; i < yearsToRetire; i++) {
       const year = baseYear + i;

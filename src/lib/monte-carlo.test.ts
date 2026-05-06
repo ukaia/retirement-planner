@@ -110,6 +110,32 @@ describe("runMonteCarlo", () => {
     }
   });
 
+  test("retirementTier de-risk reduces final estate spread", () => {
+    const aggressive = basePlan();
+    aggressive.assets[0] = {
+      ...aggressive.assets[0],
+      tier: { tier: "growth" },
+    } as Plan["assets"][number];
+    const glided: Plan = {
+      ...aggressive,
+      assets: [
+        {
+          ...aggressive.assets[0],
+          retirementTier: { tier: "income-growth" },
+        } as Plan["assets"][number],
+      ],
+    };
+    const a = runMonteCarlo({ plan: aggressive, simulations: 100, seed: 5 });
+    const g = runMonteCarlo({ plan: glided, simulations: 100, seed: 5 });
+    const aSpread =
+      a.finalEstateDistribution[a.finalEstateDistribution.length - 1] -
+      a.finalEstateDistribution[0];
+    const gSpread =
+      g.finalEstateDistribution[g.finalEstateDistribution.length - 1] -
+      g.finalEstateDistribution[0];
+    expect(gSpread).toBeLessThan(aSpread);
+  });
+
   test("seeded runs are reproducible", () => {
     const a = runMonteCarlo({ plan: basePlan(), simulations: 30, seed: 99 });
     const b = runMonteCarlo({ plan: basePlan(), simulations: 30, seed: 99 });

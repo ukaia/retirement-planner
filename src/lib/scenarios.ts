@@ -8,15 +8,18 @@ import { tierFor, type TierKey } from "./tax-constants";
  * Useful as a baseline that we can then mutate (apply early shocks, reverse, etc.).
  */
 export function deterministicSamples(plan: Plan, years: number): ReturnSamples {
+  // Sequence-risk scenarios all play out during retirement, so we use each
+  // asset's retirement tier when set (glide path), falling back to its working tier.
   const wMean = (cat: "trad-401k" | "roth-401k" | "trad-ira" | "roth-ira" | "sep-ira" | "hsa" | "brokerage") => {
     let total = 0;
     let weighted = 0;
     for (const a of plan.assets) {
       if (a.category !== cat) continue;
+      const tier = a.retirementTier ?? a.tier;
       const m =
-        a.tier.tier === "custom"
-          ? a.tier.customMean ?? 0.08
-          : tierFor(a.tier.tier as TierKey).mean;
+        tier.tier === "custom"
+          ? tier.customMean ?? 0.08
+          : tierFor(tier.tier as TierKey).mean;
       weighted += m * a.balance;
       total += a.balance;
     }

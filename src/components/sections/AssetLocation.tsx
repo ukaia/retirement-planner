@@ -21,7 +21,8 @@ export function AssetLocation() {
         <p className="mt-1 text-sm text-muted max-w-prose">
           <Term k="assetLocation">Asset location</Term> is the strategy of placing investments in
           the most tax-efficient account type. This view scores your placement and flags the
-          easiest swaps.
+          easiest swaps. It evaluates your <em>current</em> allocation; if you've set a separate
+          retirement tier (glide path), Results and Monte Carlo use that for projections.
         </p>
       </header>
 

@@ -27,7 +27,7 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
-function tierMeanStdev(asset: Asset): { mean: number; stdev: number } {
+function tierMeanStdev(asset: Asset, retired: boolean): { mean: number; stdev: number } {
   if (
     asset.category === "trad-401k" ||
     asset.category === "roth-401k" ||
@@ -37,13 +37,14 @@ function tierMeanStdev(asset: Asset): { mean: number; stdev: number } {
     asset.category === "hsa" ||
     asset.category === "brokerage"
   ) {
-    if (asset.tier.tier === "custom") {
+    const tier = retired && asset.retirementTier ? asset.retirementTier : asset.tier;
+    if (tier.tier === "custom") {
       return {
-        mean: asset.tier.customMean ?? 0.08,
-        stdev: asset.tier.customStdev ?? 0.12,
+        mean: tier.customMean ?? 0.08,
+        stdev: tier.customStdev ?? 0.12,
       };
     }
-    const t = tierFor(asset.tier.tier as TierKey);
+    const t = tierFor(tier.tier as TierKey);
     return { mean: t.mean, stdev: t.stdev };
   }
   if (asset.category === "real-estate") {
@@ -106,12 +107,12 @@ function buildSamples(args: {
     }
   }
 
-  function drawBucket(assets: Asset[]): number {
+  function drawBucket(assets: Asset[], retired: boolean): number {
     if (assets.length === 0) return 0;
     let totalWeight = 0;
     let weightedDraw = 0;
     for (const a of assets) {
-      const { mean, stdev } = tierMeanStdev(a);
+      const { mean, stdev } = tierMeanStdev(a, retired);
       const draw = mean + stdev * gaussian(args.rand);
       const weight = a.balance > 0 ? a.balance : 1;
       weightedDraw += draw * weight;
@@ -120,19 +121,24 @@ function buildSamples(args: {
     return totalWeight > 0 ? weightedDraw / totalWeight : 0;
   }
 
+  // The deterministic engine projects from the earliest retirement year onward,
+  // so every year here is at-or-after retirement. Use the retirement (de-risked)
+  // tier when set; pre-retirement working years for couples are an edge case
+  // intentionally left simple.
   for (let i = 0; i < args.years; i++) {
-    const taxable = drawBucket(bucketAssets.taxable);
-    const traditional = drawBucket(bucketAssets.traditional);
-    const roth = drawBucket(bucketAssets.roth);
-    const hsa = drawBucket(bucketAssets.hsa);
+    const retired = true;
+    const taxable = drawBucket(bucketAssets.taxable, retired);
+    const traditional = drawBucket(bucketAssets.traditional, retired);
+    const roth = drawBucket(bucketAssets.roth, retired);
+    const hsa = drawBucket(bucketAssets.hsa, retired);
     const realEstate: Record<string, number> = {};
     for (const a of re) {
-      const { mean, stdev } = tierMeanStdev(a);
+      const { mean, stdev } = tierMeanStdev(a, retired);
       realEstate[a.id] = mean + stdev * gaussian(args.rand);
     }
     const othersRet: Record<string, number> = {};
     for (const a of others) {
-      const { mean, stdev } = tierMeanStdev(a);
+      const { mean, stdev } = tierMeanStdev(a, retired);
       othersRet[a.id] = mean + stdev * gaussian(args.rand);
     }
     const inflation = Math.max(0, inflBase + inflStdev * gaussian(args.rand));

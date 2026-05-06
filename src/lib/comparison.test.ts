@@ -61,6 +61,7 @@ function strainedPlan(): Plan {
       rothConversionRule: { enabled: false, fillToBracket: "24", startAge: 60, endAge: 74 },
       monteCarlo: { simulations: 500 },
     },
+    safeSpend: { method: "monte-carlo", mcThreshold: 0.9 },
   };
 }
 

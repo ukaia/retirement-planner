@@ -10,6 +10,7 @@ import { IncomeVsExpenseChart } from "@/components/charts/IncomeVsExpenseChart";
 import { TaxStackedAreaChart } from "@/components/charts/TaxStackedAreaChart";
 import { SegmentedControl } from "@/components/inputs/SegmentedControl";
 import { Warnings } from "@/components/layout/Warnings";
+import { SafeSpendCard } from "./SafeSpendCard";
 
 export function Results() {
   const rows = useDisplayProjection();
@@ -62,6 +63,8 @@ export function Results() {
         <Stat label="Lifetime tax" value={formatCompact(totalLifetimeTax)} />
         <Stat label="Years modeled" value={String(rows.length)} />
       </div>
+
+      <SafeSpendCard />
 
       <Card title="Expected portfolio returns">
         <p className="text-xs text-muted mb-2">

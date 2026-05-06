@@ -202,6 +202,24 @@ export const socialSecuritySchema = z.object({
 export type SocialSecurity = z.infer<typeof socialSecuritySchema>;
 
 // ---------------------------------------------------------------------------
+// Goal-planning (safe spend / savings gap)
+// ---------------------------------------------------------------------------
+
+export const safeSpendMethod = z.enum(["monte-carlo", "drain-zero", "4pct"]);
+export type SafeSpendMethod = z.infer<typeof safeSpendMethod>;
+
+export const safeSpendConfigSchema = z
+  .object({
+    method: safeSpendMethod.default("monte-carlo"),
+    /** Min success rate for monte-carlo method, 0..1. */
+    mcThreshold: z.number().min(0.5).max(0.99).default(0.9),
+    /** Asset id to receive extra savings when filling gap. */
+    extraContribAssetId: z.string().optional(),
+  })
+  .default({ method: "monte-carlo", mcThreshold: 0.9 });
+export type SafeSpendConfig = z.infer<typeof safeSpendConfigSchema>;
+
+// ---------------------------------------------------------------------------
 // Engine options
 // ---------------------------------------------------------------------------
 
@@ -239,5 +257,8 @@ export const planSchema = z.object({
   healthcare: healthcareSchema,
   socialSecurity: socialSecuritySchema,
   options: optionsSchema,
+  /** Goal annual base spend in today's $ (excludes healthcare; user-entered target). */
+  targetAnnualSpend: z.number().min(0).optional(),
+  safeSpend: safeSpendConfigSchema,
 });
 export type Plan = z.infer<typeof planSchema>;

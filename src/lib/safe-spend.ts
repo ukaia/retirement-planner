@@ -29,31 +29,54 @@ export type SavingsGapResult = {
 };
 
 /**
- * Replace plan.expenses with one synthetic category equal to `annualSpendToday`,
- * preserving the rest of the plan. Healthcare/LTC stay computed separately.
+ * Scale all expense categories uniformly so their annual total equals
+ * `annualSpendToday`. Preserves each category's startAge/endAge/phaseOut/stepChange
+ * shape so age-bound expenses still phase in/out correctly.
+ *
+ * Falls back to a single synthetic category when the user has no expenses entered yet.
  */
 function planWithBaseSpend(plan: Plan, annualSpendToday: number): Plan {
+  const currentTotal = plan.expenses.reduce((s, e) => s + e.monthlyToday * 12, 0);
+  if (currentTotal <= 0) {
+    return {
+      ...plan,
+      expenses: [
+        {
+          id: "synthetic-base",
+          label: "Base spend",
+          monthlyToday: annualSpendToday / 12,
+          growth: 0,
+          startAge: null,
+          endAge: null,
+          phaseOutAtAge: null,
+          stepChange: null,
+        },
+      ],
+    };
+  }
+  const scale = annualSpendToday / currentTotal;
   return {
     ...plan,
-    expenses: [
-      {
-        id: "synthetic-base",
-        label: "Base spend",
-        monthlyToday: annualSpendToday / 12,
-        growth: 0,
-        startAge: null,
-        endAge: null,
-        phaseOutAtAge: null,
-        stepChange: null,
-      },
-    ],
+    expenses: plan.expenses.map((e) => ({ ...e, monthlyToday: e.monthlyToday * scale })),
   };
 }
 
-function yearsToRetire(plan: Plan): number {
+function yearsToRetireForOwner(
+  plan: Plan,
+  owner: "p1" | "p2" | "joint",
+): number {
   const baseYear = plan.profile.taxYear;
   const p1Age = baseYear - plan.profile.person1.birthYear;
-  return Math.max(0, plan.profile.person1.retirementAge - p1Age);
+  const p1Years = Math.max(0, plan.profile.person1.retirementAge - p1Age);
+  if (owner === "p1" || !plan.profile.person2) return p1Years;
+  const p2Age = baseYear - plan.profile.person2.birthYear;
+  const p2Years = Math.max(0, plan.profile.person2.retirementAge - p2Age);
+  if (owner === "p2") return p2Years;
+  return Math.max(p1Years, p2Years); // joint
+}
+
+function yearsToRetire(plan: Plan): number {
+  return yearsToRetireForOwner(plan, "p1");
 }
 
 function portfolioAtRetirement(plan: Plan): number {
@@ -145,6 +168,32 @@ function bisectSpend(
   return lastPass;
 }
 
+/** Inflate every asset's starting balance by `factor`. Used for two-point linearization. */
+function planWithInflatedBalances(plan: Plan, factor: number): Plan {
+  return {
+    ...plan,
+    assets: plan.assets.map((a) =>
+      a.category === "real-estate"
+        ? { ...a, balance: a.balance * factor, marketValue: a.marketValue * factor }
+        : { ...a, balance: a.balance * factor },
+    ),
+  };
+}
+
+/**
+ * Average per-year healthcare + LTC cost (nominal) the engine projects across
+ * retirement, using the user's plan with current expenses in place. Lets the 4%
+ * rule output a BASE spend comparable to drain-zero / MC (which subtract these
+ * by simulating the full draw).
+ */
+function averageHealthcareNominal(plan: Plan): number {
+  const rows = projectPlan(plan);
+  const retirementRows = rows.filter((r) => r.expensesHealthcare > 0);
+  if (retirementRows.length === 0) return 0;
+  const sum = retirementRows.reduce((s, r) => s + r.expensesHealthcare, 0);
+  return sum / retirementRows.length;
+}
+
 export function computeSafeSpend(plan: Plan): SafeSpendResult {
   const method = plan.safeSpend.method;
   const yrs = yearsToRetire(plan);
@@ -155,7 +204,11 @@ export function computeSafeSpend(plan: Plan): SafeSpendResult {
   let safeSpendNominalAtRetirement = 0;
 
   if (method === "4pct") {
-    safeSpendNominalAtRetirement = port * 0.04;
+    // Naive 4% applied to retirement-year portfolio, then reduced by avg healthcare/LTC
+    // so the figure represents BASE spend (apples-to-apples with goal input).
+    const grossNominal = port * 0.04;
+    const avgHc = averageHealthcareNominal(plan);
+    safeSpendNominalAtRetirement = Math.max(0, grossNominal - avgHc);
   } else {
     // Seed an upper bound for the search: scale by portfolio relative to current
     // expenses, with a reasonable floor.
@@ -211,7 +264,7 @@ export function computeSavingsGap(args: {
 }): SavingsGapResult {
   const { plan, safe, goalToday } = args;
 
-  if (goalToday <= safe.safeSpendToday || safe.safeSpendToday <= 0) {
+  if (goalToday <= safe.safeSpendToday) {
     return {
       requiredAnnualContribution: 0,
       portfolioGapNominal: 0,
@@ -221,15 +274,32 @@ export function computeSavingsGap(args: {
     };
   }
 
-  // Linear extrapolation: portfolio scales linearly with sustainable spend at the
-  // chosen success criterion. Holds well when income/SS/healthcare are unchanged.
-  const portfolioNeededNominal = safe.portfolioAtRetirement * (goalToday / safe.safeSpendToday);
-  const portfolioGapNominal = portfolioNeededNominal - safe.portfolioAtRetirement;
+  // Two-point linearization: safe-spend is approximately linear in portfolio when
+  // SS/healthcare/income are fixed. Probe a second point with inflated balances and
+  // derive the local slope (Δsafe / Δportfolio). The 4% rule slope is exactly 0.04;
+  // drain-zero / MC pick up the user's actual SS / income mix.
+  const inflated = computeSafeSpend(planWithInflatedBalances(plan, 1.5));
+  const dPort = inflated.portfolioAtRetirement - safe.portfolioAtRetirement;
+  const dSafe = inflated.safeSpendToday - safe.safeSpendToday;
+  // Slope $/$ — fall back to ratio if degenerate.
+  const slope =
+    dPort > 0 && dSafe > 0
+      ? dSafe / dPort
+      : safe.portfolioAtRetirement > 0
+        ? safe.safeSpendToday / safe.portfolioAtRetirement
+        : 0.04;
+
+  const portfolioNeededNominal =
+    safe.portfolioAtRetirement + (goalToday - safe.safeSpendToday) / slope;
+  const portfolioGapNominal = Math.max(0, portfolioNeededNominal - safe.portfolioAtRetirement);
 
   const assetId = plan.safeSpend.extraContribAssetId ?? null;
   const asset = assetId ? plan.assets.find((a) => a.id === assetId) ?? null : null;
   const assetReturn = asset ? preRetReturn(asset) : 0.07;
-  const fv = fvAnnuityFactor(assetReturn, safe.yearsToRetirement);
+  const horizon = asset
+    ? yearsToRetireForOwner(plan, asset.owner)
+    : safe.yearsToRetirement;
+  const fv = fvAnnuityFactor(assetReturn, horizon);
   const requiredAnnualContribution = fv > 0 ? portfolioGapNominal / fv : portfolioGapNominal;
 
   return {

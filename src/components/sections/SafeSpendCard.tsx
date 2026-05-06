@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Card, Field, FieldGrid } from "@/components/inputs/Field";
 import { NumberInput } from "@/components/inputs/NumberInput";
 import { Select } from "@/components/inputs/Select";
@@ -30,6 +30,7 @@ export function SafeSpendCard() {
   // Auto-compute fast methods; gate MC behind a button.
   const [mcResult, setMcResult] = useState<SafeSpendResult | null>(null);
   const [mcRunning, setMcRunning] = useState(false);
+  const mcRequestRef = useRef(0);
 
   const fastResult = useMemo(() => {
     if (config.method === "monte-carlo") return null;
@@ -44,13 +45,16 @@ export function SafeSpendCard() {
   }, [plan, result, goal]);
 
   const runMc = () => {
+    const requestId = ++mcRequestRef.current;
     setMcRunning(true);
     // Yield to the event loop so the spinner can render before the heavy work.
     setTimeout(() => {
       try {
-        setMcResult(computeSafeSpend(plan));
+        const r = computeSafeSpend(plan);
+        // Drop stale results: only commit if this is still the latest request.
+        if (mcRequestRef.current === requestId) setMcResult(r);
       } finally {
-        setMcRunning(false);
+        if (mcRequestRef.current === requestId) setMcRunning(false);
       }
     }, 16);
   };
@@ -169,50 +173,65 @@ export function SafeSpendCard() {
                 / yr (today's $).
               </p>
 
-              <div className="mt-3">
-                <Field
-                  label="Account to receive extra contributions"
-                  hint="Pre-retirement return rate of this account is used to compound the gap-fill."
-                >
-                  <Select<string>
-                    value={config.extraContribAssetId ?? ""}
-                    onChange={(v) =>
-                      updatePlan((p) => {
-                        p.safeSpend.extraContribAssetId = v || undefined;
-                      })
-                    }
-                    options={[
-                      { value: "", label: "— pick an account —" },
-                      ...eligible.map((a) => ({
-                        value: a.id,
-                        label: `${a.nickname ?? a.category} (${a.category})`,
-                      })),
-                    ]}
-                  />
-                </Field>
-              </div>
-
-              {gap && gap.assetId ? (
-                <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <Stat
-                    label="Required extra contribution"
-                    value={`${formatCurrency(gap.requiredAnnualContribution, {
-                      whole: true,
-                    })} / yr`}
-                  />
-                  <Stat
-                    label="Portfolio gap at retirement"
-                    value={formatCompact(gap.portfolioGapNominal)}
-                  />
-                  <Stat
-                    label="Compounded at"
-                    value={`${formatPercent(gap.assetReturn)} for ${result.yearsToRetirement} yrs`}
-                  />
-                </div>
-              ) : (
-                <p className="mt-3 text-xs text-muted">
-                  Pick an account above to see the required extra contribution.
+              {eligible.length === 0 ? (
+                <p className="mt-3 text-xs text-negative">
+                  No eligible savings accounts. Add a 401(k), IRA, HSA, or brokerage
+                  in Assets to see the required contribution.
                 </p>
+              ) : (
+                <>
+                  <div className="mt-3">
+                    <Field
+                      label="Account to receive extra contributions"
+                      hint="Pre-retirement return rate of this account is used to compound the gap-fill."
+                    >
+                      <Select<string>
+                        value={config.extraContribAssetId ?? ""}
+                        onChange={(v) =>
+                          updatePlan((p) => {
+                            p.safeSpend.extraContribAssetId = v || undefined;
+                          })
+                        }
+                        options={[
+                          { value: "", label: "— pick an account —" },
+                          ...eligible.map((a) => ({
+                            value: a.id,
+                            label: `${a.nickname ?? a.category} (${a.category})`,
+                          })),
+                        ]}
+                      />
+                    </Field>
+                  </div>
+
+                  {gap && gap.assetId ? (
+                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-4 gap-3">
+                      <Stat
+                        label="Extra / yr"
+                        value={formatCurrency(gap.requiredAnnualContribution, {
+                          whole: true,
+                        })}
+                      />
+                      <Stat
+                        label="Extra / mo"
+                        value={formatCurrency(gap.requiredAnnualContribution / 12, {
+                          whole: true,
+                        })}
+                      />
+                      <Stat
+                        label="Portfolio gap"
+                        value={formatCompact(gap.portfolioGapNominal)}
+                      />
+                      <Stat
+                        label="Compounded at"
+                        value={`${formatPercent(gap.assetReturn)}`}
+                      />
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-xs text-muted">
+                      Pick an account above to see the required extra contribution.
+                    </p>
+                  )}
+                </>
               )}
             </>
           )}

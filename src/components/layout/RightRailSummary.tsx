@@ -64,6 +64,22 @@ export function RightRailSummary() {
               value={String(summary.yearsWithShortfall)}
               tone={summary.yearsWithShortfall > 0 ? "negative" : undefined}
             />
+            {summary.goalToday !== null && summary.extraMonthlySavings !== null ? (
+              <>
+                <div className="divider" />
+                <div>
+                  <div className="text-xs text-muted mb-1">Extra savings to hit goal</div>
+                  <div className="num text-lg text-fg">
+                    {summary.extraMonthlySavings <= 0
+                      ? "On track"
+                      : `${formatCurrency(summary.extraMonthlySavings, { whole: true })} / mo`}
+                  </div>
+                  <div className="text-[11px] text-subtle mt-1">
+                    Goal {formatCurrency(summary.goalToday, { whole: true })}/yr · drain-zero estimate
+                  </div>
+                </div>
+              </>
+            ) : null}
           </div>
         ) : (
           <p className="text-xs text-subtle">Enter Profile and Assets to populate.</p>

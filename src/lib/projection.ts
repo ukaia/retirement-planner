@@ -337,9 +337,12 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
     // and the other hasn't. accumulateToRetirement stops at projectionStartYear, so we
     // top up here. Added after this year's growth (slight under-count for the year
     // contributed; balances out across years).
+    //
+    // Also accumulate deductibleOverlap so trad-401k/HSA/etc. contributions reduce the
+    // wages flowing to the tax engine (real-world W-2 / above-the-line behavior).
+    let deductibleOverlap = 0;
     for (const asset of plan.assets) {
-      const ownerRetireY =
-        asset.owner === "p2" && p2RetireYear !== null ? p2RetireYear : p1RetireYear;
+      const ownerRetireY = ownerRetireYearFor(asset, p1RetireYear, p2RetireYear);
       if (year >= ownerRetireY) continue;
       const contribution = preRetirementContribution(asset, year, accum.salaryByYear);
       if (contribution === 0) continue;
@@ -348,6 +351,7 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
         case "trad-ira":
         case "sep-ira":
           buckets.traditional += contribution;
+          deductibleOverlap += contribution;
           break;
         case "roth-401k":
         case "roth-ira":
@@ -355,6 +359,7 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
           break;
         case "hsa":
           buckets.hsa += contribution;
+          deductibleOverlap += contribution;
           break;
         case "brokerage":
           buckets.taxable.balance += contribution;
@@ -607,11 +612,14 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
           (bA.sellPriority ?? defaultPriority(bA.subtype));
       });
 
+    // Deductible contributions reduce taxable wages (trad-401k / HSA via W-2; trad-IRA / SEP via 1040 deduction).
+    const taxableWages = Math.max(0, wages - deductibleOverlap);
+
     const runWithdraw = () =>
       withdrawForSpend({
         targetNetSpend: adjustedSpend,
         income: {
-          wages,
+          wages: taxableWages,
           ordinaryIncome: pensions + annuities + rentalNet + partTime,
           rmdIncome: rmdTotal,
           socialSecurity: ss1 + ss2,
@@ -729,6 +737,24 @@ function computeSsBenefit(args: {
   let annual = monthlyNow * 12;
   if (args.isSurvivor && args.deceasedBenefit > annual) annual = args.deceasedBenefit;
   return annual;
+}
+
+/**
+ * Returns the year through which `asset` accepts contributions:
+ * - p1-owned: p1's retire year.
+ * - p2-owned: p2's retire year (falls back to p1 in single mode).
+ * - joint-owned: later of the two — joint accounts can be funded by whichever spouse still earns.
+ */
+function ownerRetireYearFor(
+  asset: Asset,
+  p1RetireYear: number,
+  p2RetireYear: number | null,
+): number {
+  if (asset.owner === "p2" && p2RetireYear !== null) return p2RetireYear;
+  if (asset.owner === "joint" && p2RetireYear !== null) {
+    return Math.max(p1RetireYear, p2RetireYear);
+  }
+  return p1RetireYear;
 }
 
 /**

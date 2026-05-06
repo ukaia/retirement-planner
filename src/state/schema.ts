@@ -34,6 +34,8 @@ export const personSchema = z.object({
   currentSalary: z.number().min(0).default(0),
   salaryGrowth: z.number().default(0.03),
   longevityAge: z.number().min(60).max(120).default(95),
+  /** When true (only meaningful for person2), retirementAge auto-syncs to retire the same calendar year as p1. */
+  syncRetireToP1: z.boolean().optional(),
 });
 export type Person = z.infer<typeof personSchema>;
 

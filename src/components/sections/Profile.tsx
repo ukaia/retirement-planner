@@ -157,14 +157,41 @@ export function Profile() {
                 value={profile.person2.birthYear}
                 min={1900}
                 max={baseYear}
-                onChange={(v) => updatePlan((p) => { p.profile.person2!.birthYear = v; })}
+                onChange={(v) => updatePlan((p) => {
+                  p.profile.person2!.birthYear = v;
+                  if (p.profile.person2!.syncRetireToP1) {
+                    p.profile.person2!.retirementAge =
+                      p.profile.person1.retirementAge + (p.profile.person1.birthYear - v);
+                  }
+                })}
               />
             </Field>
-            <Field label="Target retirement age">
+            <Field
+              label="Target retirement age"
+              hint={profile.person2.syncRetireToP1 ? "Locked to p1's retirement year" : undefined}
+              trailing={
+                <Toggle
+                  checked={!!profile.person2.syncRetireToP1}
+                  label="Sync to p1"
+                  onChange={(checked) =>
+                    updatePlan((p) => {
+                      p.profile.person2!.syncRetireToP1 = checked || undefined;
+                      if (checked) {
+                        // Force p2 to retire the same calendar year as p1.
+                        p.profile.person2!.retirementAge =
+                          p.profile.person1.retirementAge +
+                          (p.profile.person1.birthYear - p.profile.person2!.birthYear);
+                      }
+                    })
+                  }
+                />
+              }
+            >
               <NumberInput
                 value={profile.person2.retirementAge}
                 min={40}
                 max={90}
+                disabled={!!profile.person2.syncRetireToP1}
                 onChange={(v) => updatePlan((p) => { p.profile.person2!.retirementAge = v; })}
               />
             </Field>

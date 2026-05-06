@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { projectPlan } from "@/lib/projection";
 import { toReal } from "@/lib/inflation";
+import { computeSafeSpend, computeSavingsGap } from "@/lib/safe-spend";
 import { useStore } from "./store";
 
 export function useProjection() {
@@ -55,6 +56,7 @@ export function useDisplayProjection() {
 }
 
 export function useAtRetirementSummary() {
+  const plan = useStore((s) => s.plan);
   const rows = useProjection();
   return useMemo(() => {
     if (rows.length === 0) {
@@ -80,6 +82,19 @@ export function useAtRetirementSummary() {
       first.otherAssetsValue;
     const finalEstate = rows[rows.length - 1].estateValue;
     const yearsWithShortfall = rows.filter((r) => r.shortfall > 0).length;
+
+    // Live extra-savings estimate: always uses drain-zero (deterministic, fast)
+    // regardless of the user's chosen method, since MC is too slow for live updates.
+    let extraMonthlySavings: number | null = null;
+    let goalToday: number | null = null;
+    if (plan.targetAnnualSpend && plan.targetAnnualSpend > 0) {
+      goalToday = plan.targetAnnualSpend;
+      const livePlan = { ...plan, safeSpend: { ...plan.safeSpend, method: "drain-zero" as const } };
+      const safe = computeSafeSpend(livePlan);
+      const gap = computeSavingsGap({ plan: livePlan, safe, goalToday });
+      extraMonthlySavings = gap.requiredAnnualContribution / 12;
+    }
+
     return {
       yearOfRetirement: first.year,
       ageAtRetirement: first.p1Age,
@@ -89,6 +104,8 @@ export function useAtRetirementSummary() {
       gap: monthlyIncome - monthlyExpense,
       finalEstate,
       yearsWithShortfall,
+      goalToday,
+      extraMonthlySavings,
     };
-  }, [rows]);
+  }, [rows, plan]);
 }

@@ -40,7 +40,14 @@ export const useStore = create<Store>()(
     }),
     {
       name: "rp-store",
-      version: 1,
+      version: 2,
+      migrate: (persistedState, version) => {
+        const s = (persistedState ?? {}) as Partial<Store>;
+        if (version < 2 && s.plan && !(s.plan as Plan).safeSpend) {
+          (s.plan as Plan).safeSpend = { method: "monte-carlo", mcThreshold: 0.9 };
+        }
+        return s as Store;
+      },
     },
   ),
 );

@@ -15,8 +15,9 @@ export function Comparison() {
       <header>
         <h1 className="text-xl font-semibold tracking-tight">Comparison</h1>
         <p className="mt-1 text-sm text-muted max-w-prose">
-          Seven built-in alternatives next to your current plan. Each row uses your inputs as a
-          starting point and applies one strategic shift.
+          Built-in alternatives next to your current plan. Each row uses your inputs as a
+          starting point and applies one strategic shift. The "Money lasts to" column shows
+          the age at which liquid accounts run dry — blank means they don't.
         </p>
       </header>
 
@@ -31,6 +32,7 @@ export function Comparison() {
                 <th className="px-2 py-2 text-right">Monthly expense</th>
                 <th className="px-2 py-2 text-right">Lifetime tax</th>
                 <th className="px-2 py-2 text-right">Final estate</th>
+                <th className="px-2 py-2 text-right">Money lasts to</th>
                 <th className="px-2 py-2 text-right">Shortfall years</th>
               </tr>
             </thead>
@@ -60,6 +62,9 @@ export function Comparison() {
                           {formatCompact(finalDelta)}
                         </div>
                       ) : null}
+                    </td>
+                    <td className={`px-2 py-2 text-right ${r.depletionAge !== null ? "text-negative" : "text-positive"}`}>
+                      {r.depletionAge !== null ? `Age ${r.depletionAge}` : "Lasts"}
                     </td>
                     <td className={`px-2 py-2 text-right ${r.shortfallYears > 0 ? "text-negative" : ""}`}>
                       {r.shortfallYears}

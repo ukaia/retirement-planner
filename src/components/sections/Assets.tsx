@@ -142,7 +142,7 @@ function FinancialFields({ asset, update }: { asset: Asset; update: (mut: (a: As
           }
         />
       </Field>
-      <Field label="Tier">
+      <Field label="Tier (working years)">
         <Select
           value={asset.tier.tier}
           onChange={(v) =>
@@ -151,6 +151,22 @@ function FinancialFields({ asset, update }: { asset: Asset; update: (mut: (a: As
             })
           }
           options={TIER_OPTIONS}
+        />
+      </Field>
+      <Field label="Tier (retirement, optional)">
+        <Select
+          value={asset.retirementTier?.tier ?? ""}
+          onChange={(v) =>
+            update((a) => {
+              if (a.category === "real-estate" || a.category === "other") return;
+              if (!v) {
+                a.retirementTier = undefined;
+              } else {
+                a.retirementTier = { tier: v as TierKey };
+              }
+            })
+          }
+          options={[{ value: "", label: "Same as working years" }, ...TIER_OPTIONS]}
         />
       </Field>
       {asset.tier.tier === "custom" ? (
@@ -348,11 +364,41 @@ function RealEstateFields({ asset, update }: { asset: Asset; update: (mut: (a: A
             })
           }
           options={[
-            { value: "hold", label: "Hold" },
+            { value: "hold", label: "Hold (transfer to estate)" },
             { value: "liquidate", label: "Liquidate at retirement" },
+            { value: "liquidate-at-age", label: "Liquidate at specific age" },
+            { value: "sell-when-needed", label: "Sell when cash runs short" },
           ]}
         />
       </Field>
+      {asset.actionAtRetirement === "liquidate-at-age" ? (
+        <Field label="Age to liquidate">
+          <NumberInput
+            value={asset.liquidateAtAge ?? 75}
+            min={50}
+            max={120}
+            onChange={(v) =>
+              update((a) => {
+                if (a.category === "real-estate") a.liquidateAtAge = v;
+              })
+            }
+          />
+        </Field>
+      ) : null}
+      {asset.actionAtRetirement === "sell-when-needed" ? (
+        <Field label="Sell priority (lower = sold first)">
+          <NumberInput
+            value={asset.sellPriority ?? (asset.subtype === "rental" ? 1 : asset.subtype === "vacation" ? 2 : 3)}
+            min={1}
+            max={99}
+            onChange={(v) =>
+              update((a) => {
+                if (a.category === "real-estate") a.sellPriority = v;
+              })
+            }
+          />
+        </Field>
+      ) : null}
       {asset.subtype === "rental" || asset.subtype === "vacation" ? (
         <>
           <Field label="Monthly rent income">

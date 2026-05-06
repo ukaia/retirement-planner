@@ -116,6 +116,157 @@ describe("projectPlan", () => {
     expect(at65.pensions).toBeCloseTo(2_000 * 12, -1);
   });
 
+  test("growth fields populate post first year and total matches sum", () => {
+    const plan = basePlan({
+      assets: [
+        {
+          id: "ira1",
+          owner: "p1",
+          category: "trad-ira",
+          balance: 500_000,
+          annualContribution: 0,
+          tier: { tier: "balanced" },
+        },
+      ],
+    });
+    const rows = projectPlan(plan);
+    // First year: no growth applied yet (start-of-year compound skipped on yearIdx 0)
+    expect(rows[0].growthTotal).toBe(0);
+    // Year 2: traditional bucket should have grown
+    const yr2 = rows[1];
+    expect(yr2.growthTraditional).toBeGreaterThan(0);
+    expect(yr2.growthTotal).toBeCloseTo(
+      yr2.growthTaxable +
+        yr2.growthTraditional +
+        yr2.growthRoth +
+        yr2.growthHsa +
+        yr2.growthRealEstate +
+        yr2.growthOther,
+      2,
+    );
+  });
+
+  test("sell-when-needed real estate covers shortfall before liquid assets dry up", () => {
+    const planWithoutSale = basePlan({
+      assets: [
+        {
+          id: "ira",
+          owner: "p1",
+          category: "trad-ira",
+          balance: 150_000,
+          annualContribution: 0,
+          tier: { tier: "balanced" },
+        },
+        {
+          id: "house",
+          owner: "p1",
+          category: "real-estate",
+          subtype: "vacation",
+          balance: 600_000,
+          marketValue: 600_000,
+          appreciation: 0.03,
+          mortgageBalance: 0,
+          basis: 200_000,
+          yearsOwned: 10,
+          monthlyRentIncome: 0,
+          monthlyRentExpense: 0,
+          actionAtRetirement: "hold",
+        },
+      ],
+      expenses: [
+        {
+          id: "e1",
+          label: "All",
+          monthlyToday: 8_000,
+          growth: 0,
+          startAge: null,
+          endAge: null,
+          phaseOutAtAge: null,
+          stepChange: null,
+        },
+      ],
+    });
+    const baselineRows = projectPlan(planWithoutSale);
+    const baselineShortfall = baselineRows.reduce((s, r) => s + r.shortfall, 0);
+    expect(baselineShortfall).toBeGreaterThan(0); // baseline must run out
+
+    // Same plan but mark the house as sell-when-needed.
+    const planWithSale = structuredClone(planWithoutSale);
+    const re = planWithSale.assets.find((a) => a.id === "house")!;
+    if (re.category === "real-estate") {
+      re.actionAtRetirement = "sell-when-needed";
+    }
+    const saleRows = projectPlan(planWithSale);
+    const saleShortfall = saleRows.reduce((s, r) => s + r.shortfall, 0);
+    expect(saleShortfall).toBeLessThan(baselineShortfall);
+  });
+
+  test("liquidate-at-age fires on the configured year only", () => {
+    const plan = basePlan({
+      assets: [
+        {
+          id: "house",
+          owner: "p1",
+          category: "real-estate",
+          subtype: "vacation",
+          balance: 400_000,
+          marketValue: 400_000,
+          appreciation: 0.03,
+          mortgageBalance: 0,
+          basis: 200_000,
+          yearsOwned: 10,
+          monthlyRentIncome: 0,
+          monthlyRentExpense: 0,
+          actionAtRetirement: "liquidate-at-age",
+          liquidateAtAge: 75,
+        },
+      ],
+    });
+    const rows = projectPlan(plan);
+    const at74 = rows.find((r) => r.p1Age === 74)!;
+    const at75 = rows.find((r) => r.p1Age === 75)!;
+    const at76 = rows.find((r) => r.p1Age === 76)!;
+    expect(at74.realEstateValue).toBeGreaterThan(0);
+    expect(at75.realEstateValue).toBe(0); // liquidated at 75
+    expect(at76.realEstateValue).toBe(0);
+  });
+
+  test("retirementTier produces a different (lower) growth than tier when de-risked", () => {
+    const aggressive: Plan = basePlan({
+      assets: [
+        {
+          id: "ira",
+          owner: "p1",
+          category: "trad-ira",
+          balance: 500_000,
+          annualContribution: 0,
+          tier: { tier: "growth" }, // 12.49%
+        },
+      ],
+      // skip expenses so withdrawals don't muddy the growth signal
+      expenses: [],
+    });
+    const glided: Plan = basePlan({
+      assets: [
+        {
+          id: "ira",
+          owner: "p1",
+          category: "trad-ira",
+          balance: 500_000,
+          annualContribution: 0,
+          tier: { tier: "growth" },
+          retirementTier: { tier: "income-growth" }, // 5.96%
+        },
+      ],
+      expenses: [],
+    });
+    const aRows = projectPlan(aggressive);
+    const gRows = projectPlan(glided);
+    const yr5A = aRows[5];
+    const yr5G = gRows[5];
+    expect(yr5A.growthTraditional).toBeGreaterThan(yr5G.growthTraditional);
+  });
+
   test("estate value declines if expenses exceed sustainable income", () => {
     const plan = basePlan({
       assets: [

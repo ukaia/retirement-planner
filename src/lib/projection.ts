@@ -42,6 +42,14 @@ export type ProjectionRow = {
   withdrawTraditional: number;
   withdrawRoth: number;
   withdrawHsa: number;
+  // growth $ this year (sum of all buckets + real estate + others)
+  growthTaxable: number;
+  growthTraditional: number;
+  growthRoth: number;
+  growthHsa: number;
+  growthRealEstate: number;
+  growthOther: number;
+  growthTotal: number;
   // taxes
   federalTax: number;
   stateTax: number;
@@ -69,7 +77,7 @@ type Buckets = {
   hsa: number;
 };
 
-function getReturn(asset: Asset): number {
+function getReturn(asset: Asset, retired = false): number {
   switch (asset.category) {
     case "real-estate":
       return asset.appreciation;
@@ -82,10 +90,11 @@ function getReturn(asset: Asset): number {
     case "sep-ira":
     case "hsa":
     case "brokerage": {
-      if (asset.tier.tier === "custom" && asset.tier.customMean !== undefined) {
-        return asset.tier.customMean;
+      const tier = retired && asset.retirementTier ? asset.retirementTier : asset.tier;
+      if (tier.tier === "custom" && tier.customMean !== undefined) {
+        return tier.customMean;
       }
-      return tierFor(asset.tier.tier).mean;
+      return tierFor(tier.tier).mean;
     }
   }
 }
@@ -146,7 +155,38 @@ function buildInitialBuckets(plan: Plan, balances: Record<string, number>, basis
   return { buckets, realEstate, others };
 }
 
-function weightedAvgReturn(plan: Plan, category: "taxable" | "traditional" | "roth" | "hsa"): number {
+/**
+ * Returns the weighted-average return rate for each financial bucket.
+ * `null` when the bucket has no assets (so callers can render "—" rather than the fallback).
+ */
+export function effectiveReturns(plan: Plan): {
+  taxable: number | null;
+  traditional: number | null;
+  roth: number | null;
+  hsa: number | null;
+} {
+  const has = (cat: "taxable" | "traditional" | "roth" | "hsa") => {
+    for (const a of plan.assets) {
+      if (cat === "taxable" && isTaxableBucket(a)) return true;
+      if (cat === "traditional" && isTraditionalBucket(a)) return true;
+      if (cat === "roth" && isRothBucket(a)) return true;
+      if (cat === "hsa" && isHsaBucket(a)) return true;
+    }
+    return false;
+  };
+  return {
+    taxable: has("taxable") ? weightedAvgReturn(plan, "taxable", true) : null,
+    traditional: has("traditional") ? weightedAvgReturn(plan, "traditional", true) : null,
+    roth: has("roth") ? weightedAvgReturn(plan, "roth", true) : null,
+    hsa: has("hsa") ? weightedAvgReturn(plan, "hsa", true) : null,
+  };
+}
+
+function weightedAvgReturn(
+  plan: Plan,
+  category: "taxable" | "traditional" | "roth" | "hsa",
+  retired = false,
+): number {
   let weighted = 0;
   let total = 0;
   for (const asset of plan.assets) {
@@ -156,7 +196,7 @@ function weightedAvgReturn(plan: Plan, category: "taxable" | "traditional" | "ro
       (category === "roth" && isRothBucket(asset)) ||
       (category === "hsa" && isHsaBucket(asset))
     ) {
-      const ret = getReturn(asset);
+      const ret = getReturn(asset, retired);
       weighted += ret * asset.balance;
       total += asset.balance;
     }
@@ -201,11 +241,17 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
   const longevityP2 = profile.person2?.longevityAge ?? longevityP1;
   const longevityMax = Math.max(longevityP1, longevityP2);
 
-  // Returns to compound buckets each year (weighted by current allocation).
-  const retTaxable = weightedAvgReturn(plan, "taxable");
-  const retTrad = weightedAvgReturn(plan, "traditional");
-  const retRoth = weightedAvgReturn(plan, "roth");
-  const retHsa = weightedAvgReturn(plan, "hsa");
+  // Returns to compound buckets each year. Pre-retirement uses each asset's `tier`;
+  // post-retirement uses `retirementTier` when set (glide path). We pre-compute both
+  // weighted averages and pick per year.
+  const retTaxablePre = weightedAvgReturn(plan, "taxable", false);
+  const retTradPre = weightedAvgReturn(plan, "traditional", false);
+  const retRothPre = weightedAvgReturn(plan, "roth", false);
+  const retHsaPre = weightedAvgReturn(plan, "hsa", false);
+  const retTaxablePost = weightedAvgReturn(plan, "taxable", true);
+  const retTradPost = weightedAvgReturn(plan, "traditional", true);
+  const retRothPost = weightedAvgReturn(plan, "roth", true);
+  const retHsaPost = weightedAvgReturn(plan, "hsa", true);
 
   // Start projection at the earlier of the two retirement years.
   const p1RetireYear = baseYear + (p1Retire - (baseYear - p1Born));
@@ -241,18 +287,30 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
     const p2Age = p2Born !== null ? year - p2Born : null;
 
     // Bucket growth (apply at start of year).
+    let growthTaxable = 0;
+    let growthTraditional = 0;
+    let growthRoth = 0;
+    let growthHsa = 0;
+    let growthRealEstate = 0;
+    let growthOther = 0;
     if (yearIdx > 0) {
       const sample = samples?.byYear[yearIdx];
-      const yrTaxable = sample?.taxable ?? retTaxable;
-      const yrTrad = sample?.traditional ?? retTrad;
-      const yrRoth = sample?.roth ?? retRoth;
-      const yrHsa = sample?.hsa ?? retHsa;
+      // Use post-retirement (de-risked) returns once p1 has retired.
+      const isRetired = p1Age >= p1Retire;
+      const yrTaxable = sample?.taxable ?? (isRetired ? retTaxablePost : retTaxablePre);
+      const yrTrad = sample?.traditional ?? (isRetired ? retTradPost : retTradPre);
+      const yrRoth = sample?.roth ?? (isRetired ? retRothPost : retRothPre);
+      const yrHsa = sample?.hsa ?? (isRetired ? retHsaPost : retHsaPre);
 
-      buckets.taxable.balance *= 1 + yrTaxable;
+      growthTaxable = buckets.taxable.balance * yrTaxable;
+      buckets.taxable.balance += growthTaxable;
       // basis stays put (not affected by gains)
-      buckets.traditional *= 1 + yrTrad;
-      buckets.roth *= 1 + yrRoth;
-      buckets.hsa *= 1 + yrHsa;
+      growthTraditional = buckets.traditional * yrTrad;
+      buckets.traditional += growthTraditional;
+      growthRoth = buckets.roth * yrRoth;
+      buckets.roth += growthRoth;
+      growthHsa = buckets.hsa * yrHsa;
+      buckets.hsa += growthHsa;
       // Real estate & other assets compound too
       for (const [, re] of realEstate) {
         if (!liquidatedThisYear.has(re.remaining.id)) {
@@ -260,17 +318,39 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
           const ret =
             sample?.realEstate[id] ??
             (re.remaining as Extract<Asset, { category: "real-estate" }>).appreciation;
-          re.value *= 1 + ret;
+          const delta = re.value * ret;
+          growthRealEstate += delta;
+          re.value += delta;
         }
       }
       for (const [, o] of others) {
         const id = o.remaining.id;
         const ret = sample?.others[id] ?? getReturn(o.remaining);
-        o.value *= 1 + ret;
+        const delta = o.value * ret;
+        growthOther += delta;
+        o.value += delta;
       }
     }
 
-    // Liquidations on the retirement year for this owner.
+    // Helper: liquidate one real-estate property. Returns the LTCG gain (after Section 121 if primary).
+    const liquidateOne = (
+      id: string,
+      re: { value: number; basis: number; remaining: typeof plan.assets[number] },
+    ): { gain: number; isIdaho: boolean } => {
+      const a = re.remaining as Extract<Asset, { category: "real-estate" }>;
+      const proceeds = re.value - a.mortgageBalance;
+      let gain = re.value - re.basis;
+      if (a.subtype === "primary") {
+        gain = Math.max(0, gain - SECTION_121_EXCLUSION[filingStatus]);
+      }
+      buckets.taxable.balance += proceeds;
+      buckets.taxable.basis += proceeds;
+      liquidatedThisYear.add(id);
+      re.value = 0;
+      return { gain, isIdaho: profile.state === "ID" };
+    };
+
+    // Scheduled liquidations: at-retirement (legacy "liquidate") + new "liquidate-at-age".
     let liquidationGains = 0;
     let idahoPropertyGains = 0;
     for (const [id, re] of realEstate) {
@@ -278,23 +358,17 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
       const a = re.remaining as Extract<Asset, { category: "real-estate" }>;
       const ownerRetireYear =
         a.owner === "p2" && p2RetireYear !== null ? p2RetireYear : p1RetireYear;
-      if (year === ownerRetireYear && a.actionAtRetirement === "liquidate") {
-        const proceeds = re.value - a.mortgageBalance;
-        let gain = re.value - re.basis;
-        if (a.subtype === "primary") {
-          gain = Math.max(0, gain - SECTION_121_EXCLUSION[filingStatus]);
-        } else if (a.subtype === "rental") {
-          // Depreciation recapture: cost_basis / 27.5 * years_owned, taxed as ordinary at up to 25%.
-          // Simplified: treat recapture as ordinary income added separately.
-          // Spec: combine recapture + remaining gain as LTCG for first cut; surface in notes.
-          // Keep it simple here.
-        }
-        if (profile.state === "ID") idahoPropertyGains += gain;
+      const ownerAge = a.owner === "p2" && p2Age !== null ? p2Age : p1Age;
+      const fireAtRetirement =
+        year === ownerRetireYear && a.actionAtRetirement === "liquidate";
+      const fireAtAge =
+        a.actionAtRetirement === "liquidate-at-age" &&
+        a.liquidateAtAge !== undefined &&
+        ownerAge === a.liquidateAtAge;
+      if (fireAtRetirement || fireAtAge) {
+        const { gain, isIdaho } = liquidateOne(id, re);
         liquidationGains += gain;
-        buckets.taxable.balance += proceeds;
-        buckets.taxable.basis += proceeds; // proceeds become new basis going forward
-        liquidatedThisYear.add(id);
-        re.value = 0;
+        if (isIdaho) idahoPropertyGains += gain;
       }
     }
 
@@ -484,25 +558,54 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
     // Tax-free income streams reduce the net spend target directly (1:1, no tax).
     const adjustedSpend = Math.max(0, expensesTotal - streamsTaxFree);
 
-    // Withdrawal for the year. Ordinary streams join wages/pensions/etc.; LTCG streams join forcedLongTermGains.
-    const w = withdrawForSpend({
-      targetNetSpend: adjustedSpend,
-      income: {
-        wages,
-        ordinaryIncome: pensions + annuities + rentalNet + partTime,
-        rmdIncome: rmdTotal,
-        socialSecurity: ss1 + ss2,
-        rothConversion,
-        forcedLongTermGains: liquidationGains + streamsLtcg,
-        qualifiedDividends: 0,
-        idahoPropertyGains,
-        qualifiedMedicalSpend: Math.min(plan.healthcare.medigap ? 0 : medicareCost, buckets.hsa),
-      },
-      buckets,
-      filingStatus,
-      state: profile.state,
-      year: taxYr,
-    });
+    // Sell-when-needed properties available, sorted by priority (low number first; primary last by default).
+    // withdrawForSpend does not mutate the input buckets (it spreads them), so we can safely re-run
+    // it after a liquidation to recompute the shortfall against the larger taxable balance.
+    const defaultPriority = (sub: "primary" | "vacation" | "rental"): number =>
+      sub === "rental" ? 1 : sub === "vacation" ? 2 : 3;
+    const sellQueue = Array.from(realEstate.entries())
+      .filter(([id, re]) => {
+        if (liquidatedThisYear.has(id)) return false;
+        const a = re.remaining as Extract<Asset, { category: "real-estate" }>;
+        return a.actionAtRetirement === "sell-when-needed";
+      })
+      .sort(([, a], [, b]) => {
+        const aA = a.remaining as Extract<Asset, { category: "real-estate" }>;
+        const bA = b.remaining as Extract<Asset, { category: "real-estate" }>;
+        return (aA.sellPriority ?? defaultPriority(aA.subtype)) -
+          (bA.sellPriority ?? defaultPriority(bA.subtype));
+      });
+
+    const runWithdraw = () =>
+      withdrawForSpend({
+        targetNetSpend: adjustedSpend,
+        income: {
+          wages,
+          ordinaryIncome: pensions + annuities + rentalNet + partTime,
+          rmdIncome: rmdTotal,
+          socialSecurity: ss1 + ss2,
+          rothConversion,
+          forcedLongTermGains: liquidationGains + streamsLtcg,
+          qualifiedDividends: 0,
+          idahoPropertyGains,
+          qualifiedMedicalSpend: Math.min(plan.healthcare.medigap ? 0 : medicareCost, buckets.hsa),
+        },
+        buckets,
+        filingStatus,
+        state: profile.state,
+        year: taxYr,
+      });
+
+    let w = runWithdraw();
+
+    // If shortfall, try liquidating one sell-when-needed property at a time and re-run.
+    while (w.shortfall > 0 && sellQueue.length > 0) {
+      const [id, re] = sellQueue.shift()!;
+      const { gain, isIdaho } = liquidateOne(id, re);
+      liquidationGains += gain;
+      if (isIdaho) idahoPropertyGains += gain;
+      w = runWithdraw();
+    }
 
     // Apply withdrawal results to buckets.
     Object.assign(buckets, w.buckets);
@@ -542,6 +645,19 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
       withdrawTraditional: w.grossWithdrawn.traditional,
       withdrawRoth: w.grossWithdrawn.roth,
       withdrawHsa: w.grossWithdrawn.hsa,
+      growthTaxable,
+      growthTraditional,
+      growthRoth,
+      growthHsa,
+      growthRealEstate,
+      growthOther,
+      growthTotal:
+        growthTaxable +
+        growthTraditional +
+        growthRoth +
+        growthHsa +
+        growthRealEstate +
+        growthOther,
       federalTax: w.taxes.federal,
       stateTax: w.taxes.state,
       totalTax: w.taxes.total,

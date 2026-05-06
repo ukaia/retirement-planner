@@ -141,6 +141,26 @@ const combinedPush: Variant = {
   build: (p) => delaySs70.build(aggressiveSaver.build(p)),
 };
 
+function scaleExpenses(plan: Plan, factor: number): Plan {
+  const next = structuredClone(plan);
+  for (const e of next.expenses) e.monthlyToday *= factor;
+  return next;
+}
+
+const spendLess10: Variant = {
+  id: "spend-less-10",
+  label: "Spend 10% less",
+  description: "Trim every expense category by 10%. Money lasts longer for the same plan.",
+  build: (p) => scaleExpenses(p, 0.9),
+};
+
+const spendLess20: Variant = {
+  id: "spend-less-20",
+  label: "Spend 20% less",
+  description: "A leaner retirement: 20% less across the board.",
+  build: (p) => scaleExpenses(p, 0.8),
+};
+
 export const VARIANTS: Variant[] = [
   baseline,
   aggressiveSaver,
@@ -149,6 +169,8 @@ export const VARIANTS: Variant[] = [
   higherReturns,
   delaySs70,
   rothLadder,
+  spendLess10,
+  spendLess20,
   combinedPush,
 ];
 
@@ -163,6 +185,8 @@ export type VariantResult = {
   finalEstate: number;
   lifetimeTax: number;
   shortfallYears: number;
+  /** Age at which liquid assets first hit zero (or shortfall first appears). null if money lasts. */
+  depletionAge: number | null;
 };
 
 export function buildVariantResults(plan: Plan): VariantResult[] {
@@ -192,6 +216,11 @@ function summarize(v: Variant, rows: ProjectionRow[]): VariantResult {
       first.rentalNet +
       first.partTime) /
     12;
+  const depleted = rows.find(
+    (r) =>
+      r.shortfall > 0 ||
+      r.taxableBalance + r.traditionalBalance + r.rothBalance + r.hsaBalance <= 0,
+  );
   return {
     id: v.id,
     label: v.label,
@@ -203,5 +232,6 @@ function summarize(v: Variant, rows: ProjectionRow[]): VariantResult {
     finalEstate: last.estateValue,
     lifetimeTax: rows.reduce((s, r) => s + r.totalTax, 0),
     shortfallYears: rows.filter((r) => r.shortfall > 0).length,
+    depletionAge: depleted ? depleted.p1Age : null,
   };
 }

@@ -1,7 +1,10 @@
+import { useState } from "react";
 import { Card } from "@/components/inputs/Field";
 import { useDisplayProjection } from "@/state/selectors";
 import { useStore } from "@/state/store";
 import { formatCompact, formatCurrency, formatPercent } from "@/lib/formatters";
+import type { ProjectionRow } from "@/lib/projection";
+import { effectiveReturns } from "@/lib/projection";
 import { AssetGrowthChart } from "@/components/charts/AssetGrowthChart";
 import { IncomeVsExpenseChart } from "@/components/charts/IncomeVsExpenseChart";
 import { TaxStackedAreaChart } from "@/components/charts/TaxStackedAreaChart";
@@ -10,8 +13,10 @@ import { Warnings } from "@/components/layout/Warnings";
 
 export function Results() {
   const rows = useDisplayProjection();
+  const plan = useStore((s) => s.plan);
   const displayMode = useStore((s) => s.displayMode);
   const setDisplayMode = useStore((s) => s.setDisplayMode);
+  const returns = effectiveReturns(plan);
 
   if (rows.length === 0) {
     return (
@@ -58,6 +63,19 @@ export function Results() {
         <Stat label="Years modeled" value={String(rows.length)} />
       </div>
 
+      <Card title="Expected portfolio returns">
+        <p className="text-xs text-muted mb-2">
+          Weighted-average return assumption used each year, by bucket. Comes from each
+          asset's tier; change tiers in Assets.
+        </p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <ReturnPill label="Taxable" rate={returns.taxable} />
+          <ReturnPill label="Traditional" rate={returns.traditional} />
+          <ReturnPill label="Roth" rate={returns.roth} />
+          <ReturnPill label="HSA" rate={returns.hsa} />
+        </div>
+      </Card>
+
       <Card title="Asset growth & drawdown">
         <AssetGrowthChart rows={rows} />
       </Card>
@@ -71,46 +89,7 @@ export function Results() {
       </Card>
 
       <Card title="Year-by-year detail">
-        <div className="overflow-x-auto -mx-6 px-6">
-          <table className="num text-[11px] w-full border-collapse">
-            <thead>
-              <tr className="text-subtle text-left">
-                <th className="px-2 py-1.5 sticky left-0 bg-surface">Year</th>
-                <th className="px-2 py-1.5">Age</th>
-                <th className="px-2 py-1.5">Wages</th>
-                <th className="px-2 py-1.5">SS</th>
-                <th className="px-2 py-1.5">RMD</th>
-                <th className="px-2 py-1.5">Spending</th>
-                <th className="px-2 py-1.5">Healthcare</th>
-                <th className="px-2 py-1.5">Tax</th>
-                <th className="px-2 py-1.5">Trad</th>
-                <th className="px-2 py-1.5">Roth</th>
-                <th className="px-2 py-1.5">Taxable</th>
-                <th className="px-2 py-1.5">Estate</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.year} className={`border-t border-border ${r.shortfall > 0 ? "bg-negative/5" : ""}`}>
-                  <td className="px-2 py-1 sticky left-0 bg-surface">{r.year}</td>
-                  <td className="px-2 py-1">{r.p1Age}</td>
-                  <td className="px-2 py-1">{formatCompact(r.wages)}</td>
-                  <td className="px-2 py-1">{formatCompact(r.ssP1 + r.ssP2)}</td>
-                  <td className="px-2 py-1">{formatCompact(r.rmdTotal)}</td>
-                  <td className="px-2 py-1">{formatCompact(r.expensesBase)}</td>
-                  <td className="px-2 py-1">{formatCompact(r.expensesHealthcare)}</td>
-                  <td className="px-2 py-1">{formatCompact(r.totalTax)}</td>
-                  <td className="px-2 py-1">{formatCompact(r.traditionalBalance)}</td>
-                  <td className="px-2 py-1">{formatCompact(r.rothBalance)}</td>
-                  <td className="px-2 py-1">{formatCompact(r.taxableBalance)}</td>
-                  <td className={`px-2 py-1 ${r.estateValue <= 0 ? "text-negative" : ""}`}>
-                    {formatCompact(r.estateValue)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DetailTable rows={rows} />
         <div className="mt-2 text-[11px] text-subtle">
           Effective tax rate first year: <span className="num">{formatPercent(first.effectiveRate)}</span>.
           Last year: <span className="num">{formatPercent(last.effectiveRate)}</span>.
@@ -125,11 +104,144 @@ export function Results() {
   );
 }
 
+function ReturnPill({ label, rate }: { label: string; rate: number | null }) {
+  return (
+    <div className="rounded-md border border-border px-3 py-2">
+      <div className="text-[11px] text-subtle">{label}</div>
+      <div className={`num text-sm mt-0.5 ${rate === null ? "text-subtle" : ""}`}>
+        {rate === null ? "—" : formatPercent(rate)}
+      </div>
+    </div>
+  );
+}
+
 function Stat({ label, value, tone }: { label: string; value: string; tone?: "negative" }) {
   return (
     <div className="card !p-4">
       <div className="text-xs text-muted">{label}</div>
       <div className={`num text-base mt-1 ${tone === "negative" ? "text-negative" : ""}`}>{value}</div>
     </div>
+  );
+}
+
+type DetailView = "summary" | "balances" | "flows";
+
+function DetailTable({ rows }: { rows: ProjectionRow[] }) {
+  const [view, setView] = useState<DetailView>("summary");
+  return (
+    <>
+      <div className="mb-2 flex justify-end">
+        <SegmentedControl
+          value={view}
+          onChange={(v) => setView(v as DetailView)}
+          options={[
+            { value: "summary", label: "Summary" },
+            { value: "balances", label: "All balances" },
+            { value: "flows", label: "Withdrawals & growth" },
+          ]}
+        />
+      </div>
+      <div className="overflow-x-auto -mx-6 px-6">
+        <table className="num text-[11px] w-full border-collapse">
+          <thead>
+            <tr className="text-subtle text-left">
+              <th className="px-2 py-1.5 sticky left-0 bg-surface">Year</th>
+              <th className="px-2 py-1.5">Age</th>
+              {view === "summary" && (
+                <>
+                  <th className="px-2 py-1.5">Wages</th>
+                  <th className="px-2 py-1.5">SS</th>
+                  <th className="px-2 py-1.5">RMD</th>
+                  <th className="px-2 py-1.5">Spending</th>
+                  <th className="px-2 py-1.5">Healthcare</th>
+                  <th className="px-2 py-1.5">Tax</th>
+                  <th className="px-2 py-1.5">Trad</th>
+                  <th className="px-2 py-1.5">Roth</th>
+                  <th className="px-2 py-1.5">Taxable</th>
+                  <th className="px-2 py-1.5">Estate</th>
+                </>
+              )}
+              {view === "balances" && (
+                <>
+                  <th className="px-2 py-1.5">Taxable</th>
+                  <th className="px-2 py-1.5">Trad</th>
+                  <th className="px-2 py-1.5">Roth</th>
+                  <th className="px-2 py-1.5">HSA</th>
+                  <th className="px-2 py-1.5">Real estate</th>
+                  <th className="px-2 py-1.5">Other</th>
+                  <th className="px-2 py-1.5">Estate</th>
+                </>
+              )}
+              {view === "flows" && (
+                <>
+                  <th className="px-2 py-1.5">WD-Tax</th>
+                  <th className="px-2 py-1.5">WD-Trad</th>
+                  <th className="px-2 py-1.5">WD-Roth</th>
+                  <th className="px-2 py-1.5">WD-HSA</th>
+                  <th className="px-2 py-1.5">Roth conv</th>
+                  <th className="px-2 py-1.5">Growth $</th>
+                  <th className="px-2 py-1.5">Tax</th>
+                  <th className="px-2 py-1.5">Estate</th>
+                </>
+              )}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr
+                key={r.year}
+                className={`border-t border-border ${r.shortfall > 0 ? "bg-negative/5" : ""}`}
+              >
+                <td className="px-2 py-1 sticky left-0 bg-surface">{r.year}</td>
+                <td className="px-2 py-1">{r.p1Age}</td>
+                {view === "summary" && (
+                  <>
+                    <td className="px-2 py-1">{formatCompact(r.wages)}</td>
+                    <td className="px-2 py-1">{formatCompact(r.ssP1 + r.ssP2)}</td>
+                    <td className="px-2 py-1">{formatCompact(r.rmdTotal)}</td>
+                    <td className="px-2 py-1">{formatCompact(r.expensesBase)}</td>
+                    <td className="px-2 py-1">{formatCompact(r.expensesHealthcare)}</td>
+                    <td className="px-2 py-1">{formatCompact(r.totalTax)}</td>
+                    <td className="px-2 py-1">{formatCompact(r.traditionalBalance)}</td>
+                    <td className="px-2 py-1">{formatCompact(r.rothBalance)}</td>
+                    <td className="px-2 py-1">{formatCompact(r.taxableBalance)}</td>
+                    <td className={`px-2 py-1 ${r.estateValue <= 0 ? "text-negative" : ""}`}>
+                      {formatCompact(r.estateValue)}
+                    </td>
+                  </>
+                )}
+                {view === "balances" && (
+                  <>
+                    <td className="px-2 py-1">{formatCompact(r.taxableBalance)}</td>
+                    <td className="px-2 py-1">{formatCompact(r.traditionalBalance)}</td>
+                    <td className="px-2 py-1">{formatCompact(r.rothBalance)}</td>
+                    <td className="px-2 py-1">{formatCompact(r.hsaBalance)}</td>
+                    <td className="px-2 py-1">{formatCompact(r.realEstateValue)}</td>
+                    <td className="px-2 py-1">{formatCompact(r.otherAssetsValue)}</td>
+                    <td className={`px-2 py-1 ${r.estateValue <= 0 ? "text-negative" : ""}`}>
+                      {formatCompact(r.estateValue)}
+                    </td>
+                  </>
+                )}
+                {view === "flows" && (
+                  <>
+                    <td className="px-2 py-1">{formatCompact(r.withdrawTaxable)}</td>
+                    <td className="px-2 py-1">{formatCompact(r.withdrawTraditional)}</td>
+                    <td className="px-2 py-1">{formatCompact(r.withdrawRoth)}</td>
+                    <td className="px-2 py-1">{formatCompact(r.withdrawHsa)}</td>
+                    <td className="px-2 py-1">{formatCompact(r.rothConversion)}</td>
+                    <td className="px-2 py-1 text-positive">{formatCompact(r.growthTotal)}</td>
+                    <td className="px-2 py-1">{formatCompact(r.totalTax)}</td>
+                    <td className={`px-2 py-1 ${r.estateValue <= 0 ? "text-negative" : ""}`}>
+                      {formatCompact(r.estateValue)}
+                    </td>
+                  </>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }

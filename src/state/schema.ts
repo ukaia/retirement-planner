@@ -73,6 +73,8 @@ const taxAdvantagedRetirement = baseAsset.extend({
   employerMatchPct: z.number().min(0).max(1).optional(),
   annualContribution: z.number().min(0).optional(), // for IRA/HSA
   tier: tierConfig,
+  /** Optional de-risked tier used once the owner reaches retirement. Falls back to `tier` if unset. */
+  retirementTier: tierConfig.optional(),
 });
 
 const brokerage = baseAsset.extend({
@@ -80,6 +82,7 @@ const brokerage = baseAsset.extend({
   monthlyContribution: z.number().min(0).default(0),
   costBasis: z.number().min(0).default(0),
   tier: tierConfig,
+  retirementTier: tierConfig.optional(),
 });
 
 const realEstate = baseAsset.extend({
@@ -92,7 +95,16 @@ const realEstate = baseAsset.extend({
   yearsOwned: z.number().min(0).default(0),
   monthlyRentIncome: z.number().min(0).default(0),
   monthlyRentExpense: z.number().min(0).default(0),
-  actionAtRetirement: z.enum(["hold", "liquidate"]).default("hold"),
+  actionAtRetirement: z
+    .enum(["hold", "liquidate", "liquidate-at-age", "sell-when-needed"])
+    .default("hold"),
+  /** Age to liquidate when actionAtRetirement === "liquidate-at-age". */
+  liquidateAtAge: z.number().min(0).max(120).optional(),
+  /**
+   * Lower number = sold first when sell-when-needed fires. Defaults: rental 1, vacation 2, primary 3.
+   * Primary residences should usually be the last resort.
+   */
+  sellPriority: z.number().int().min(1).max(99).optional(),
 });
 
 const otherAsset = baseAsset.extend({

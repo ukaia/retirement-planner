@@ -1,5 +1,4 @@
 import type { SectionId } from "@/state/sections";
-import { SectionStub } from "./SectionStub";
 import { Profile } from "./Profile";
 import { Assets } from "./Assets";
 import { Expenses } from "./Expenses";
@@ -11,6 +10,7 @@ import { Estate } from "./Estate";
 import { SequenceRisk } from "./SequenceRisk";
 import { AssetLocation } from "./AssetLocation";
 import { Comparison } from "./Comparison";
+import { Income } from "./Income";
 
 export function SectionRenderer({ id }: { id: SectionId }) {
   switch (id) {
@@ -25,12 +25,7 @@ export function SectionRenderer({ id }: { id: SectionId }) {
     case "social-security":
       return <SocialSecurity />;
     case "income":
-      return (
-        <SectionStub
-          title="Income Streams"
-          description="Pensions, annuities, part-time work — for now use Assets → Other for pensions/annuities."
-        />
-      );
+      return <Income />;
     case "results":
       return <Results />;
     case "monte-carlo":

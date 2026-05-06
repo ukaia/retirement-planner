@@ -373,8 +373,10 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
       else if (a.subtype === "annuity") annuities += annual;
     }
 
-    // Income streams (user-defined), tracked under partTime / pensions (treat as ordinary).
-    let partTime = 0;
+    // Income streams (user-defined), split by their tax treatment.
+    let partTime = 0; // ordinary-income streams + partial-ss bucket
+    let streamsLtcg = 0;
+    let streamsTaxFree = 0;
     for (const stream of plan.incomeStreams) {
       const ownerAge =
         stream.owner === "p2" && p2Age !== null ? p2Age : p1Age;
@@ -383,7 +385,23 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
       const growth = stream.growth || profile.inflation;
       const yearsSinceStart = ownerAge - stream.startAge;
       const annual = stream.monthlyAmount * 12 * Math.pow(1 + growth, yearsSinceStart);
-      partTime += annual;
+      switch (stream.taxability) {
+        case "ltcg":
+          streamsLtcg += annual;
+          break;
+        case "tax-free":
+          streamsTaxFree += annual;
+          break;
+        case "partial-ss":
+          // Treat 85% as ordinary; 15% tax-free. A simplification of SS-style treatment.
+          partTime += annual * 0.85;
+          streamsTaxFree += annual * 0.15;
+          break;
+        case "ordinary":
+        default:
+          partTime += annual;
+          break;
+      }
     }
 
     // RMDs
@@ -463,16 +481,19 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
     const expensesHealthcare = acaCost + medicareCost + irmaaSurcharge + ltcExpected;
     const expensesTotal = expensesBase + expensesHealthcare;
 
-    // Withdrawal for the year (target = expensesTotal net; income streams help).
+    // Tax-free income streams reduce the net spend target directly (1:1, no tax).
+    const adjustedSpend = Math.max(0, expensesTotal - streamsTaxFree);
+
+    // Withdrawal for the year. Ordinary streams join wages/pensions/etc.; LTCG streams join forcedLongTermGains.
     const w = withdrawForSpend({
-      targetNetSpend: expensesTotal,
+      targetNetSpend: adjustedSpend,
       income: {
         wages,
         ordinaryIncome: pensions + annuities + rentalNet + partTime,
         rmdIncome: rmdTotal,
         socialSecurity: ss1 + ss2,
         rothConversion,
-        forcedLongTermGains: liquidationGains,
+        forcedLongTermGains: liquidationGains + streamsLtcg,
         qualifiedDividends: 0,
         idahoPropertyGains,
         qualifiedMedicalSpend: Math.min(plan.healthcare.medigap ? 0 : medicareCost, buckets.hsa),

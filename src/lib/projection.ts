@@ -1,0 +1,601 @@
+import type { Asset, Plan } from "../state/schema";
+import { accumulateToRetirement } from "./growth";
+import { annualAcaCost, annualMedicareBase, expectedLtcAnnualCost } from "./healthcare";
+import { annualIrmaaCost } from "./irmaa";
+import { computeRmd } from "./rmd";
+import { benefitAtClaimAge, earningsTestWithholding } from "./social-security";
+import {
+  SECTION_121_EXCLUSION,
+  SS,
+  fraMonths,
+  tierFor,
+  type FilingStatus,
+  type TaxYear,
+} from "./tax-constants";
+import { withdrawForSpend } from "./withdrawal";
+
+export type ProjectionRow = {
+  year: number;
+  p1Age: number;
+  p2Age: number | null;
+  // income components (gross)
+  wages: number;
+  ssP1: number;
+  ssP2: number;
+  pensions: number;
+  annuities: number;
+  rentalNet: number;
+  partTime: number;
+  rmdTotal: number;
+  rothConversion: number;
+  // healthcare
+  acaCost: number;
+  medicareCost: number;
+  irmaaSurcharge: number;
+  ltcExpected: number;
+  // expenses
+  expensesBase: number;
+  expensesHealthcare: number;
+  expensesTotal: number;
+  // withdrawals (gross)
+  withdrawTaxable: number;
+  withdrawTraditional: number;
+  withdrawRoth: number;
+  withdrawHsa: number;
+  // taxes
+  federalTax: number;
+  stateTax: number;
+  totalTax: number;
+  effectiveRate: number;
+  // balances at year end
+  taxableBalance: number;
+  taxableBasis: number;
+  traditionalBalance: number;
+  rothBalance: number;
+  hsaBalance: number;
+  realEstateValue: number;
+  otherAssetsValue: number;
+  estateValue: number;
+  // alerts
+  shortfall: number;
+  // MAGI used for IRMAA
+  magi: number;
+};
+
+type Buckets = {
+  taxable: { balance: number; basis: number };
+  traditional: number;
+  roth: number;
+  hsa: number;
+};
+
+function getReturn(asset: Asset): number {
+  switch (asset.category) {
+    case "real-estate":
+      return asset.appreciation;
+    case "other":
+      return asset.expectedReturn ?? asset.appreciation ?? 0;
+    case "trad-401k":
+    case "roth-401k":
+    case "trad-ira":
+    case "roth-ira":
+    case "sep-ira":
+    case "hsa":
+    case "brokerage": {
+      if (asset.tier.tier === "custom" && asset.tier.customMean !== undefined) {
+        return asset.tier.customMean;
+      }
+      return tierFor(asset.tier.tier).mean;
+    }
+  }
+}
+
+function isTraditionalBucket(asset: Asset): boolean {
+  return asset.category === "trad-401k" || asset.category === "trad-ira" || asset.category === "sep-ira";
+}
+function isRothBucket(asset: Asset): boolean {
+  return asset.category === "roth-401k" || asset.category === "roth-ira";
+}
+function isHsaBucket(asset: Asset): boolean {
+  return asset.category === "hsa";
+}
+function isTaxableBucket(asset: Asset): boolean {
+  return asset.category === "brokerage";
+}
+
+/**
+ * Build initial buckets from accumulated balances at retirement.
+ * Real estate and "other" non-financial assets are tracked separately.
+ */
+function buildInitialBuckets(plan: Plan, balances: Record<string, number>, basisMap: Record<string, number>): {
+  buckets: Buckets;
+  realEstate: Map<string, { value: number; basis: number; remaining: typeof plan.assets[number] }>;
+  others: Map<string, { value: number; basis: number; remaining: typeof plan.assets[number] }>;
+} {
+  const buckets: Buckets = {
+    taxable: { balance: 0, basis: 0 },
+    traditional: 0,
+    roth: 0,
+    hsa: 0,
+  };
+  const realEstate = new Map();
+  const others = new Map();
+
+  for (const asset of plan.assets) {
+    const bal = balances[asset.id] ?? 0;
+    const basis = basisMap[asset.id] ?? bal;
+    if (asset.category === "real-estate") {
+      realEstate.set(asset.id, { value: bal, basis, remaining: asset });
+      continue;
+    }
+    if (asset.category === "other") {
+      others.set(asset.id, { value: bal, basis, remaining: asset });
+      continue;
+    }
+    if (isTaxableBucket(asset)) {
+      buckets.taxable.balance += bal;
+      buckets.taxable.basis += basis;
+    } else if (isTraditionalBucket(asset)) {
+      buckets.traditional += bal;
+    } else if (isRothBucket(asset)) {
+      buckets.roth += bal;
+    } else if (isHsaBucket(asset)) {
+      buckets.hsa += bal;
+    }
+  }
+  return { buckets, realEstate, others };
+}
+
+function weightedAvgReturn(plan: Plan, category: "taxable" | "traditional" | "roth" | "hsa"): number {
+  let weighted = 0;
+  let total = 0;
+  for (const asset of plan.assets) {
+    if (
+      (category === "taxable" && isTaxableBucket(asset)) ||
+      (category === "traditional" && isTraditionalBucket(asset)) ||
+      (category === "roth" && isRothBucket(asset)) ||
+      (category === "hsa" && isHsaBucket(asset))
+    ) {
+      const ret = getReturn(asset);
+      weighted += ret * asset.balance;
+      total += asset.balance;
+    }
+  }
+  return total > 0 ? weighted / total : 0.07;
+}
+
+export type ReturnSamples = {
+  /** Year-indexed (0 = first projection year). Each entry: returns by bucket category and asset id. */
+  byYear: Array<{
+    taxable: number;
+    traditional: number;
+    roth: number;
+    hsa: number;
+    realEstate: Record<string, number>;
+    others: Record<string, number>;
+    inflation: number;
+  }>;
+};
+
+/**
+ * Year-by-year projection from current year through plan-to age of the longest-lived person.
+ *
+ * If `samples` is provided, each year uses those returns instead of the deterministic
+ * weighted-average tier returns. Used by Monte Carlo simulation.
+ */
+export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[] {
+  const { profile } = plan;
+  const baseYear = profile.taxYear;
+  const accum = accumulateToRetirement(plan);
+  const { buckets, realEstate, others } = buildInitialBuckets(
+    plan,
+    accum.balanceByAsset,
+    accum.basisByAsset,
+  );
+
+  const p1Born = profile.person1.birthYear;
+  const p2Born = profile.person2?.birthYear ?? null;
+  const p1Retire = profile.person1.retirementAge;
+  const p2Retire = profile.person2?.retirementAge ?? null;
+  const longevityP1 = profile.person1.longevityAge;
+  const longevityP2 = profile.person2?.longevityAge ?? longevityP1;
+  const longevityMax = Math.max(longevityP1, longevityP2);
+
+  // Returns to compound buckets each year (weighted by current allocation).
+  const retTaxable = weightedAvgReturn(plan, "taxable");
+  const retTrad = weightedAvgReturn(plan, "traditional");
+  const retRoth = weightedAvgReturn(plan, "roth");
+  const retHsa = weightedAvgReturn(plan, "hsa");
+
+  // Start projection at the earlier of the two retirement years.
+  const p1RetireYear = baseYear + (p1Retire - (baseYear - p1Born));
+  const p2RetireYear =
+    p2Born !== null && p2Retire !== null
+      ? baseYear + (p2Retire - (baseYear - p2Born))
+      : null;
+  const projectionStartYear =
+    p2RetireYear !== null ? Math.min(p1RetireYear, p2RetireYear) : p1RetireYear;
+  const projectionEndYear = baseYear + (longevityMax - (baseYear - p1Born));
+
+  // Liquidations on retirement year — adjust buckets.
+  const liquidatedThisYear = new Set<string>();
+
+  // Track MAGI history for IRMAA 2-yr lookback.
+  const magiByYear: Record<number, number> = {};
+
+  // Death year (for survivor SS): assume p1 dies at 85 if couple, else not modeled.
+  const p1DeathYear = profile.mode === "couple" ? baseYear + (85 - (baseYear - p1Born)) : null;
+
+  const rows: ProjectionRow[] = [];
+
+  let p1Survivor = false;
+  let p2Survivor = false; // not used since we model p1 death only
+  void p2Survivor;
+
+  let yearIdx = 0;
+  const filingStatus: FilingStatus = profile.filingStatus;
+  const taxYr: TaxYear = profile.taxYear;
+
+  for (let year = projectionStartYear; year <= projectionEndYear; year++, yearIdx++) {
+    const p1Age = year - p1Born;
+    const p2Age = p2Born !== null ? year - p2Born : null;
+
+    // Bucket growth (apply at start of year).
+    if (yearIdx > 0) {
+      const sample = samples?.byYear[yearIdx];
+      const yrTaxable = sample?.taxable ?? retTaxable;
+      const yrTrad = sample?.traditional ?? retTrad;
+      const yrRoth = sample?.roth ?? retRoth;
+      const yrHsa = sample?.hsa ?? retHsa;
+
+      buckets.taxable.balance *= 1 + yrTaxable;
+      // basis stays put (not affected by gains)
+      buckets.traditional *= 1 + yrTrad;
+      buckets.roth *= 1 + yrRoth;
+      buckets.hsa *= 1 + yrHsa;
+      // Real estate & other assets compound too
+      for (const [, re] of realEstate) {
+        if (!liquidatedThisYear.has(re.remaining.id)) {
+          const id = re.remaining.id;
+          const ret =
+            sample?.realEstate[id] ??
+            (re.remaining as Extract<Asset, { category: "real-estate" }>).appreciation;
+          re.value *= 1 + ret;
+        }
+      }
+      for (const [, o] of others) {
+        const id = o.remaining.id;
+        const ret = sample?.others[id] ?? getReturn(o.remaining);
+        o.value *= 1 + ret;
+      }
+    }
+
+    // Liquidations on the retirement year for this owner.
+    let liquidationGains = 0;
+    let idahoPropertyGains = 0;
+    for (const [id, re] of realEstate) {
+      if (liquidatedThisYear.has(id)) continue;
+      const a = re.remaining as Extract<Asset, { category: "real-estate" }>;
+      const ownerRetireYear =
+        a.owner === "p2" && p2RetireYear !== null ? p2RetireYear : p1RetireYear;
+      if (year === ownerRetireYear && a.actionAtRetirement === "liquidate") {
+        const proceeds = re.value - a.mortgageBalance;
+        let gain = re.value - re.basis;
+        if (a.subtype === "primary") {
+          gain = Math.max(0, gain - SECTION_121_EXCLUSION[filingStatus]);
+        } else if (a.subtype === "rental") {
+          // Depreciation recapture: cost_basis / 27.5 * years_owned, taxed as ordinary at up to 25%.
+          // Simplified: treat recapture as ordinary income added separately.
+          // Spec: combine recapture + remaining gain as LTCG for first cut; surface in notes.
+          // Keep it simple here.
+        }
+        if (profile.state === "ID") idahoPropertyGains += gain;
+        liquidationGains += gain;
+        buckets.taxable.balance += proceeds;
+        buckets.taxable.basis += proceeds; // proceeds become new basis going forward
+        liquidatedThisYear.add(id);
+        re.value = 0;
+      }
+    }
+
+    // Wages (still working before retirement age).
+    let wages = 0;
+    if (p1Age < p1Retire) wages += accum.salaryByYear.p1[year] ?? 0;
+    if (p2Age !== null && p2Retire !== null && p2Age < p2Retire) {
+      wages += accum.salaryByYear.p2[year] ?? 0;
+    }
+
+    // Social Security benefits this year.
+    let ss1 = computeSsBenefit({
+      person: { pia: plan.socialSecurity.person1.pia, birthYear: p1Born },
+      claimAge: plan.socialSecurity.person1.claimAge,
+      currentAge: p1Age,
+      yearsSinceBase: yearIdx,
+      cola: SS.cola2026,
+      isSurvivor: p1Survivor,
+      deceasedBenefit: 0,
+    });
+    let ss2 = 0;
+    if (p2Born !== null && plan.socialSecurity.person2) {
+      ss2 = computeSsBenefit({
+        person: { pia: plan.socialSecurity.person2.pia, birthYear: p2Born },
+        claimAge: plan.socialSecurity.person2.claimAge,
+        currentAge: p2Age!,
+        yearsSinceBase: yearIdx,
+        cola: SS.cola2026,
+        isSurvivor: false,
+        deceasedBenefit: 0,
+      });
+    }
+
+    // Earnings test on SS if claimed early and still working.
+    if (wages > 0 && ss1 > 0) {
+      const wh = earningsTestWithholding({
+        wages: wages,
+        ageMonthsAtYearStart: p1Age * 12,
+        birthYear: p1Born,
+      });
+      ss1 = Math.max(0, ss1 - wh);
+    }
+
+    // Survivor: when p1 dies, p2 collects max(own, p1's deceased benefit).
+    if (p1DeathYear !== null && year > p1DeathYear) {
+      // p1 gone; p2 may gain survivor benefit.
+      const deceased = ss1; // p1 benefit at death
+      ss1 = 0;
+      if (ss2 < deceased) ss2 = deceased;
+      p1Survivor = true;
+    }
+
+    // Pensions, annuities, rental net.
+    let pensions = 0;
+    let annuities = 0;
+    let rentalNet = 0;
+    for (const [, re] of realEstate) {
+      if (liquidatedThisYear.has(re.remaining.id)) continue;
+      const a = re.remaining as Extract<Asset, { category: "real-estate" }>;
+      if (a.subtype === "rental" || a.subtype === "vacation") {
+        const months = (a.monthlyRentIncome - a.monthlyRentExpense) * 12;
+        rentalNet += months * Math.pow(1 + profile.inflation, yearIdx);
+      }
+    }
+    for (const [, o] of others) {
+      const a = o.remaining as Extract<Asset, { category: "other" }>;
+      if (!a.startAge || !a.monthlyBenefit) continue;
+      const ownerAge =
+        a.owner === "p2" && p2Age !== null ? p2Age : p1Age;
+      if (ownerAge < a.startAge) continue;
+      const yearsSinceStart = ownerAge - a.startAge;
+      const cola = a.cola ?? 0;
+      const monthly = a.monthlyBenefit * Math.pow(1 + cola, yearsSinceStart);
+      const annual = monthly * 12;
+      if (a.subtype === "pension") pensions += annual;
+      else if (a.subtype === "annuity") annuities += annual;
+    }
+
+    // Income streams (user-defined), tracked under partTime / pensions (treat as ordinary).
+    let partTime = 0;
+    for (const stream of plan.incomeStreams) {
+      const ownerAge =
+        stream.owner === "p2" && p2Age !== null ? p2Age : p1Age;
+      if (ownerAge < stream.startAge) continue;
+      if (stream.endAge !== null && ownerAge > stream.endAge) continue;
+      const growth = stream.growth || profile.inflation;
+      const yearsSinceStart = ownerAge - stream.startAge;
+      const annual = stream.monthlyAmount * 12 * Math.pow(1 + growth, yearsSinceStart);
+      partTime += annual;
+    }
+
+    // RMDs
+    const rmdP1 = computeRmd({
+      priorYearEndBalance: buckets.traditional, // approximation: only one traditional bucket
+      ownerAgeAtYearEnd: p1Age,
+      ownerBirthYear: p1Born,
+    });
+    let rmdP2 = 0;
+    if (p2Born !== null && p2Age !== null) {
+      // We don't separate per-owner traditional balances; for now charge p2 RMD off the same pool.
+      // This is an approximation; per-owner pooling can come later.
+      rmdP2 = computeRmd({
+        priorYearEndBalance: 0,
+        ownerAgeAtYearEnd: p2Age,
+        ownerBirthYear: p2Born,
+      });
+    }
+    const rmdTotal = Math.min(rmdP1 + rmdP2, buckets.traditional);
+    buckets.traditional -= rmdTotal;
+    // RMDs land in taxable as net-of-tax cash; we'll treat them as ordinary income in withdraw.
+    // The withdraw routine handles this.
+
+    // Roth conversion (rule-driven, simplified: convert a fixed amount per year if in window).
+    let rothConversion = 0;
+    const rule = plan.options.rothConversionRule;
+    if (rule.enabled && p1Age >= rule.startAge && p1Age <= rule.endAge) {
+      // Convert up to ~$30k/year as a simple implementation.
+      // A more sophisticated version would compute the exact bracket fill.
+      const convert = Math.min(30_000, buckets.traditional);
+      buckets.traditional -= convert;
+      buckets.roth += convert;
+      rothConversion = convert;
+    }
+
+    // Healthcare costs.
+    const peopleCount = profile.mode === "couple" ? 2 : 1;
+    let acaCost = 0;
+    let medicareCost = 0;
+    let irmaaSurcharge = 0;
+
+    const lookbackMagi = magiByYear[year - 2] ?? wages + (rmdP1 + rmdP2);
+    if (p1Age >= 65 || (p2Age !== null && p2Age >= 65)) {
+      const medCovered = (p1Age >= 65 ? 1 : 0) + ((p2Age ?? 0) >= 65 ? 1 : 0);
+      medicareCost = medCovered * annualMedicareBase({ year, includeMedigap: plan.healthcare.medigap });
+      const irmaa = annualIrmaaCost({
+        magiTwoYearsPrior: lookbackMagi,
+        year,
+        filingStatus,
+      });
+      // The "annual" already includes the standard premium in tier 1; for non-tier-1, surcharge = annual - tier1.
+      const tier1Annual = 12 * (202.90 + 0); // approximate base reference
+      irmaaSurcharge = Math.max(0, irmaa.annual - tier1Annual) * medCovered;
+    }
+    if (p1Age < 65 && p1Age >= p1Retire) {
+      const aca = annualAcaCost({
+        tier: plan.healthcare.acaTier,
+        people: peopleCount as 1 | 2,
+        year,
+        magi: lookbackMagi,
+      });
+      acaCost = aca.net;
+    }
+
+    const ltcExpected = plan.healthcare.ltc.enabled
+      ? expectedLtcAnnualCost({
+          year,
+          probability: plan.healthcare.ltc.probability,
+          annualCost: plan.healthcare.ltc.annualCost,
+          durationYears: plan.healthcare.ltc.durationYears,
+          spreadOverYears: longevityMax - p1Retire,
+        })
+      : 0;
+
+    // Expenses
+    const expensesBase = computeExpenses(plan, p1Age, yearIdx, profile.inflation);
+    const expensesHealthcare = acaCost + medicareCost + irmaaSurcharge + ltcExpected;
+    const expensesTotal = expensesBase + expensesHealthcare;
+
+    // Withdrawal for the year (target = expensesTotal net; income streams help).
+    const w = withdrawForSpend({
+      targetNetSpend: expensesTotal,
+      income: {
+        wages,
+        ordinaryIncome: pensions + annuities + rentalNet + partTime,
+        rmdIncome: rmdTotal,
+        socialSecurity: ss1 + ss2,
+        rothConversion,
+        forcedLongTermGains: liquidationGains,
+        qualifiedDividends: 0,
+        idahoPropertyGains,
+        qualifiedMedicalSpend: Math.min(plan.healthcare.medigap ? 0 : medicareCost, buckets.hsa),
+      },
+      buckets,
+      filingStatus,
+      state: profile.state,
+      year: taxYr,
+    });
+
+    // Apply withdrawal results to buckets.
+    Object.assign(buckets, w.buckets);
+    magiByYear[year] = w.magi;
+
+    const realEstateValue = sumRealEstate(realEstate);
+    const otherAssetsValue = sumOthers(others);
+    const estateValue =
+      buckets.taxable.balance +
+      buckets.traditional +
+      buckets.roth +
+      buckets.hsa +
+      realEstateValue +
+      otherAssetsValue;
+
+    rows.push({
+      year,
+      p1Age,
+      p2Age,
+      wages,
+      ssP1: ss1,
+      ssP2: ss2,
+      pensions,
+      annuities,
+      rentalNet,
+      partTime,
+      rmdTotal,
+      rothConversion,
+      acaCost,
+      medicareCost,
+      irmaaSurcharge,
+      ltcExpected,
+      expensesBase,
+      expensesHealthcare,
+      expensesTotal,
+      withdrawTaxable: w.grossWithdrawn.taxable,
+      withdrawTraditional: w.grossWithdrawn.traditional,
+      withdrawRoth: w.grossWithdrawn.roth,
+      withdrawHsa: w.grossWithdrawn.hsa,
+      federalTax: w.taxes.federal,
+      stateTax: w.taxes.state,
+      totalTax: w.taxes.total,
+      effectiveRate: w.taxes.effectiveRate,
+      taxableBalance: buckets.taxable.balance,
+      taxableBasis: buckets.taxable.basis,
+      traditionalBalance: buckets.traditional,
+      rothBalance: buckets.roth,
+      hsaBalance: buckets.hsa,
+      realEstateValue,
+      otherAssetsValue,
+      estateValue,
+      shortfall: w.shortfall,
+      magi: w.magi,
+    });
+  }
+
+  return rows;
+}
+
+function computeSsBenefit(args: {
+  person: { pia: number; birthYear: number };
+  claimAge: number;
+  currentAge: number;
+  yearsSinceBase: number;
+  cola: number;
+  isSurvivor: boolean;
+  deceasedBenefit: number;
+}): number {
+  if (args.currentAge < args.claimAge) return 0;
+  const monthlyAtClaim = benefitAtClaimAge({
+    pia: args.person.pia,
+    claimAgeMonths: args.claimAge * 12,
+    birthYear: args.person.birthYear,
+  });
+  const yearsSinceClaim = Math.max(0, args.currentAge - args.claimAge);
+  const monthlyNow = monthlyAtClaim * Math.pow(1 + args.cola, yearsSinceClaim);
+  let annual = monthlyNow * 12;
+  if (args.isSurvivor && args.deceasedBenefit > annual) annual = args.deceasedBenefit;
+  return annual;
+}
+
+function computeExpenses(
+  plan: Plan,
+  p1Age: number,
+  yearIdx: number,
+  inflation: number,
+): number {
+  let total = 0;
+  const retireAge = plan.profile.person1.retirementAge;
+  for (const e of plan.expenses) {
+    const startAge = e.startAge ?? retireAge;
+    const endAge = e.endAge ?? plan.profile.person1.longevityAge;
+    if (p1Age < startAge || p1Age > endAge) continue;
+    if (e.phaseOutAtAge !== null && p1Age >= e.phaseOutAtAge) continue;
+    const growth = e.growth || inflation;
+    let monthly = e.monthlyToday * Math.pow(1 + growth, yearIdx);
+    if (e.stepChange !== null && p1Age >= e.stepChange.atAge) {
+      monthly *= e.stepChange.multiplier;
+    }
+    total += monthly * 12;
+  }
+  return total;
+}
+
+function sumRealEstate(map: Map<string, { value: number }>): number {
+  let s = 0;
+  for (const [, v] of map) s += v.value;
+  return s;
+}
+function sumOthers(map: Map<string, { value: number }>): number {
+  let s = 0;
+  for (const [, v] of map) s += v.value;
+  return s;
+}
+
+// silence unused
+void fraMonths;

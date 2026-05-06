@@ -60,4 +60,6 @@ The calc engine in `src/lib/` is fully isolated from React and depends only on t
 
 Tax tables, contribution limits, IRMAA brackets, FRA tables, and the IRS Uniform Lifetime Table are hardcoded in `src/lib/tax-constants.ts` with citations. A handful of 2026 figures (WA LTCG threshold, OR standard deduction, ID zero-rate threshold, ACA FPL) are still being verified — see `docs/CONSTANTS_TODO.md`. Each is flagged with a `// TODO(verify-2026)` comment in code.
 
-This app is a planning aid, not tax advice. Verify any tax-sensitive decisions with a CPA or financial planner.
+## Disclaimer
+
+For planning and educational purposes only. Not financial, tax, or legal advice. Projections are estimates based on the inputs and assumptions you provide and on historical tax rules current as of 2025–2026. Past performance is not a guarantee of future results. Actual outcomes will vary, often substantially. Consult a qualified financial planner, CPA, or attorney before making decisions based on these projections. The authors of this software make no representations about its accuracy and accept no liability for outcomes.

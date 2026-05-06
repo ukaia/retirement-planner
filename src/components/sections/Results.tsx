@@ -7,6 +7,7 @@ import { IncomeVsExpenseChart } from "@/components/charts/IncomeVsExpenseChart";
 import { TaxStackedAreaChart } from "@/components/charts/TaxStackedAreaChart";
 import { SegmentedControl } from "@/components/inputs/SegmentedControl";
 import { Warnings } from "@/components/layout/Warnings";
+import { DisclaimerCard } from "@/components/layout/Disclaimer";
 
 export function Results() {
   const rows = useDisplayProjection();
@@ -121,6 +122,8 @@ export function Results() {
           ) : null}
         </div>
       </Card>
+
+      <DisclaimerCard />
     </section>
   );
 }

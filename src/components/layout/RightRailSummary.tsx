@@ -64,18 +64,29 @@ export function RightRailSummary() {
               value={String(summary.yearsWithShortfall)}
               tone={summary.yearsWithShortfall > 0 ? "negative" : undefined}
             />
+            {summary.safeSpendToday !== null ? (
+              <>
+                <div className="divider" />
+                <SummaryRow
+                  label="Safe spend today"
+                  value={formatCurrency(summary.safeSpendToday, { whole: true })}
+                />
+              </>
+            ) : null}
             {summary.goalToday !== null && summary.extraMonthlySavings !== null ? (
               <>
                 <div className="divider" />
                 <div>
                   <div className="text-xs text-muted mb-1">Extra savings to hit goal</div>
                   <div className="num text-lg text-fg">
-                    {summary.extraMonthlySavings <= 0
-                      ? "On track"
-                      : `${formatCurrency(summary.extraMonthlySavings, { whole: true })} / mo`}
+                    {!Number.isFinite(summary.extraMonthlySavings)
+                      ? "Goal unreachable"
+                      : summary.extraMonthlySavings <= 0
+                        ? "On track"
+                        : `${formatCurrency(summary.extraMonthlySavings, { whole: true })} / mo`}
                   </div>
                   <div className="text-[11px] text-subtle mt-1">
-                    Goal {formatCurrency(summary.goalToday, { whole: true })}/yr · drain-zero estimate
+                    Goal {formatCurrency(summary.goalToday, { whole: true })}/yr · {summary.liveMethodLabel}
                   </div>
                 </div>
               </>

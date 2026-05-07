@@ -83,16 +83,31 @@ export function useAtRetirementSummary() {
     const finalEstate = rows[rows.length - 1].estateValue;
     const yearsWithShortfall = rows.filter((r) => r.shortfall > 0).length;
 
-    // Live extra-savings estimate: always uses drain-zero (deterministic, fast)
-    // regardless of the user's chosen method, since MC is too slow for live updates.
+    // Follow the user's chosen method when it can be evaluated quickly:
+    // - drain-zero  → bisection (~75ms), fine for live updates.
+    // - 4pct        → analytic, instant.
+    // - monte-carlo → too slow per keystroke; fall back to drain-zero and label.
     let extraMonthlySavings: number | null = null;
     let goalToday: number | null = null;
+    let safeSpendToday: number | null = null;
+    const userMethod = plan.safeSpend.method;
+    const liveMethod = userMethod === "monte-carlo" ? "drain-zero" : userMethod;
+    const liveMethodLabel = userMethod === "monte-carlo"
+      ? "drain-zero proxy (MC needs Calculate)"
+      : userMethod === "4pct"
+        ? "4% rule"
+        : "drain-zero";
+
     if (plan.targetAnnualSpend && plan.targetAnnualSpend > 0) {
       goalToday = plan.targetAnnualSpend;
-      const livePlan = { ...plan, safeSpend: { ...plan.safeSpend, method: "drain-zero" as const } };
+      const livePlan = { ...plan, safeSpend: { ...plan.safeSpend, method: liveMethod } };
       const safe = computeSafeSpend(livePlan);
       const gap = computeSavingsGap({ plan: livePlan, safe, goalToday });
       extraMonthlySavings = gap.requiredAnnualContribution / 12;
+      safeSpendToday = safe.safeSpendToday;
+    } else {
+      const livePlan = { ...plan, safeSpend: { ...plan.safeSpend, method: liveMethod } };
+      safeSpendToday = computeSafeSpend(livePlan).safeSpendToday;
     }
 
     return {
@@ -106,6 +121,8 @@ export function useAtRetirementSummary() {
       yearsWithShortfall,
       goalToday,
       extraMonthlySavings,
+      safeSpendToday,
+      liveMethodLabel,
     };
   }, [rows, plan]);
 }

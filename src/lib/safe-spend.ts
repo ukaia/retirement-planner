@@ -88,6 +88,26 @@ function portfolioAtRetirement(plan: Plan): number {
   return total;
 }
 
+/**
+ * Liquid (spendable) portfolio at retirement: the investable buckets only.
+ * Held real estate and "other" assets are not directly withdrawable, so the 4%
+ * rule should not multiply against them. Real-estate that's scheduled to
+ * liquidate at retirement shows up here because projection.ts moves the
+ * proceeds into the taxable bucket on the retirement year — running the
+ * projection and reading the first row picks that up.
+ */
+function liquidPortfolioAtRetirement(plan: Plan): number {
+  const rows = projectPlan(plan);
+  if (rows.length === 0) return 0;
+  const first = rows[0];
+  return (
+    first.taxableBalance +
+    first.traditionalBalance +
+    first.rothBalance +
+    first.hsaBalance
+  );
+}
+
 /** Investable assets eligible to receive extra contributions. */
 export function eligibleContribAssets(plan: Plan): Asset[] {
   return plan.assets.filter((a) =>
@@ -344,9 +364,12 @@ export function computeSafeSpend(plan: Plan): SafeSpendResult {
   let safeSpendNominalAtRetirement = 0;
 
   if (method === "4pct") {
-    // Naive 4% applied to retirement-year portfolio, then reduced by avg healthcare/LTC
-    // so the figure represents BASE spend (apples-to-apples with goal input).
-    const grossNominal = port * 0.04;
+    // 4% rule applies to the LIQUID portion only — held real estate and other
+    // non-investable assets aren't withdrawable. Switching a property from
+    // "hold" to "liquidate at retirement" therefore changes this number,
+    // because the projection shifts the proceeds into the taxable bucket.
+    const liquid = liquidPortfolioAtRetirement(plan);
+    const grossNominal = liquid * 0.04;
     const avgHc = averageHealthcareNominal(plan);
     safeSpendNominalAtRetirement = Math.max(0, grossNominal - avgHc);
   } else {
@@ -430,11 +453,13 @@ export function computeSavingsGap(args: {
   let portfolioGapNominal: number;
 
   if (plan.safeSpend.method === "4pct") {
-    // Analytic: invert safeNominal = port × 0.04 − avgHc → solve for port_needed.
+    // Analytic: invert safeNominal = liquid × 0.04 − avgHc → solve for liquid_needed.
+    // Compares against the liquid portfolio (matches the safe-spend basis above).
     const inflationFactor = Math.pow(1 + plan.profile.inflation, safe.yearsToRetirement);
     const avgHc = averageHealthcareNominal(plan);
+    const liquid = liquidPortfolioAtRetirement(plan);
     const portfolioNeeded = (goalToday * inflationFactor + avgHc) / 0.04;
-    portfolioGapNominal = Math.max(0, portfolioNeeded - safe.portfolioAtRetirement);
+    portfolioGapNominal = Math.max(0, portfolioNeeded - liquid);
     requiredAnnualContribution = fv > 0 ? portfolioGapNominal / fv : portfolioGapNominal;
   } else if (plan.safeSpend.method === "monte-carlo" && preferMcAccurate) {
     // Slow path: bisect with MC inner test. Runs only when user clicked Calculate.

@@ -189,6 +189,8 @@ function weightedAvgReturn(
 ): number {
   let weighted = 0;
   let total = 0;
+  let count = 0;
+  let unweightedSum = 0;
   for (const asset of plan.assets) {
     if (
       (category === "taxable" && isTaxableBucket(asset)) ||
@@ -199,9 +201,16 @@ function weightedAvgReturn(
       const ret = getReturn(asset, retired);
       weighted += ret * asset.balance;
       total += asset.balance;
+      count++;
+      unweightedSum += ret;
     }
   }
-  return total > 0 ? weighted / total : 0.07;
+  // Balance-weighted when balances exist; otherwise simple average across the
+  // bucket's accounts (e.g. user is contributing to a $0-balance IRA — the tier
+  // they set should still drive the displayed/used rate, not a 7% fallback).
+  if (total > 0) return weighted / total;
+  if (count > 0) return unweightedSum / count;
+  return 0.07;
 }
 
 export type ReturnSamples = {

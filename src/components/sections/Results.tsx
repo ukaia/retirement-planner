@@ -9,8 +9,11 @@ import { AssetGrowthChart } from "@/components/charts/AssetGrowthChart";
 import { IncomeVsExpenseChart } from "@/components/charts/IncomeVsExpenseChart";
 import { TaxStackedAreaChart } from "@/components/charts/TaxStackedAreaChart";
 import { SegmentedControl } from "@/components/inputs/SegmentedControl";
+import { Select } from "@/components/inputs/Select";
+import { Field } from "@/components/inputs/Field";
 import { Warnings } from "@/components/layout/Warnings";
 import { SafeSpendCard } from "./SafeSpendCard";
+import type { TierKey } from "@/lib/tax-constants";
 
 export function Results() {
   const rows = useDisplayProjection();
@@ -69,7 +72,8 @@ export function Results() {
       <Card title="Expected portfolio returns">
         <p className="text-xs text-muted mb-2">
           Weighted-average return assumption used each year, by bucket. Comes from each
-          asset's tier; change tiers in Assets.
+          asset's tier; change tiers in Assets — or use the bulk control below to set
+          retirement-tier on every account at once.
         </p>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <ReturnPill label="Taxable" rate={returns.taxable} />
@@ -77,6 +81,7 @@ export function Results() {
           <ReturnPill label="Roth" rate={returns.roth} />
           <ReturnPill label="HSA" rate={returns.hsa} />
         </div>
+        <BulkRetirementTier />
       </Card>
 
       <Card title="Asset growth & drawdown">
@@ -104,6 +109,81 @@ export function Results() {
         </div>
       </Card>
     </section>
+  );
+}
+
+/** Bulk-set every investable asset's `retirementTier`. Lets the user dial in
+ *  a glide-path on the Results page without visiting each asset row. */
+function BulkRetirementTier() {
+  const plan = useStore((s) => s.plan);
+  const updatePlan = useStore((s) => s.updatePlan);
+
+  // Detect if all investable assets currently agree on a retirementTier value;
+  // if so, show that as the active selection. Otherwise show "mixed".
+  const investable = plan.assets.filter((a) =>
+    a.category === "trad-401k" ||
+    a.category === "roth-401k" ||
+    a.category === "trad-ira" ||
+    a.category === "roth-ira" ||
+    a.category === "sep-ira" ||
+    a.category === "hsa" ||
+    a.category === "brokerage",
+  );
+  const tiers = new Set(
+    investable.map((a) =>
+      a.category === "real-estate" || a.category === "other"
+        ? "__same__"
+        : a.retirementTier?.tier ?? "__same__",
+    ),
+  );
+  const currentValue = tiers.size === 1 ? Array.from(tiers)[0] : "__mixed__";
+
+  if (investable.length === 0) return null;
+
+  const apply = (tier: string) => {
+    updatePlan((p) => {
+      for (const a of p.assets) {
+        if (
+          a.category !== "real-estate" &&
+          a.category !== "other"
+        ) {
+          if (tier === "__same__") {
+            a.retirementTier = undefined;
+          } else {
+            a.retirementTier = { tier: tier as TierKey };
+          }
+        }
+      }
+    });
+  };
+
+  return (
+    <div className="mt-4 pt-3 border-t border-border">
+      <Field
+        label="Retirement-tier (applies to all investable accounts)"
+        hint={
+          currentValue === "__mixed__"
+            ? "Accounts currently use different retirement tiers."
+            : "Click a tier to override every account's retirement-phase return."
+        }
+      >
+        <Select<string>
+          value={currentValue === "__mixed__" ? "" : currentValue}
+          onChange={apply}
+          options={[
+            { value: "__same__", label: "Same as working years" },
+            { value: "income-growth", label: "Income/Growth (5.96%)" },
+            { value: "balanced", label: "Balanced (8.12%)" },
+            { value: "growth-income", label: "Growth/Income (9.62%)" },
+            { value: "growth", label: "Growth (12.49%)" },
+            { value: "aggressive-growth", label: "Aggressive Growth (12.49%)" },
+            ...(currentValue === "__mixed__"
+              ? [{ value: "", label: "— mixed (pick to override) —" }]
+              : []),
+          ]}
+        />
+      </Field>
+    </div>
   );
 }
 

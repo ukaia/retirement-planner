@@ -89,23 +89,39 @@ function portfolioAtRetirement(plan: Plan): number {
 }
 
 /**
- * Liquid (spendable) portfolio at retirement: the investable buckets only.
- * Held real estate and "other" assets are not directly withdrawable, so the 4%
- * rule should not multiply against them. Real-estate that's scheduled to
- * liquidate at retirement shows up here because projection.ts moves the
- * proceeds into the taxable bucket on the retirement year — running the
- * projection and reading the first row picks that up.
+ * Liquid (spendable) portfolio at retirement: the investable buckets PLUS the
+ * net proceeds from any real estate that will eventually liquidate. Held real
+ * estate is excluded because the 4% rule can't withdraw against an illiquid
+ * primary residence the user plans to keep.
+ *
+ * Action mapping:
+ * - "hold"             → not counted (illiquid, kept as legacy/use).
+ * - "liquidate"        → already in taxable bucket at projection-start row.
+ * - "liquidate-at-age" → market value − mortgage added (treats future sale as
+ *                       reachable wealth; ignores future appreciation/timing).
+ * - "sell-when-needed" → market value − mortgage added (contingent but the
+ *                       user has flagged it as available if shortfall arises).
  */
 function liquidPortfolioAtRetirement(plan: Plan): number {
   const rows = projectPlan(plan);
   if (rows.length === 0) return 0;
   const first = rows[0];
-  return (
+  let liquid =
     first.taxableBalance +
     first.traditionalBalance +
     first.rothBalance +
-    first.hsaBalance
-  );
+    first.hsaBalance;
+
+  const accum = accumulateToRetirement(plan);
+  for (const a of plan.assets) {
+    if (a.category !== "real-estate") continue;
+    if (a.actionAtRetirement === "hold" || a.actionAtRetirement === "liquidate") continue;
+    // "liquidate-at-age" or "sell-when-needed": include net proceeds at retirement-year value.
+    const value = accum.balanceByAsset[a.id] ?? 0;
+    const netProceeds = Math.max(0, value - (a.mortgageBalance ?? 0));
+    liquid += netProceeds;
+  }
+  return liquid;
 }
 
 /** Investable assets eligible to receive extra contributions. */

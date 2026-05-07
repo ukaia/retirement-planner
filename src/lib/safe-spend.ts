@@ -119,13 +119,19 @@ function preRetReturn(asset: Asset): number {
   return 0.07;
 }
 
-/** Deterministic: success when last estate ≥ 0 and no shortfall years. */
+/**
+ * Deterministic: success when last estate ≥ 0 and no shortfall years.
+ *
+ * The shortfall floor (`< 1`) tolerates floating-point noise — the iterative
+ * tax/withdrawal solver can return shortfalls in the cents range when buckets
+ * fully cover spend, and a strict `=== 0` check would reject those as failures.
+ */
 function deterministicSuccess(plan: Plan): boolean {
   const rows = projectPlan(plan);
   if (rows.length === 0) return true;
   const last = rows[rows.length - 1];
   if (last.estateValue < 0) return false;
-  return rows.every((r) => r.shortfall === 0);
+  return rows.every((r) => r.shortfall < 1);
 }
 
 /** Monte Carlo: success rate ≥ threshold. Uses a small sim count for speed. */

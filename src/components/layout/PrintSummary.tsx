@@ -19,12 +19,20 @@ export function PrintSummary() {
     );
   }
 
-  // Always use drain-zero for the printed summary so it renders deterministically
-  // without requiring an MC pass.
-  const liveSafePlan = { ...plan, safeSpend: { ...plan.safeSpend, method: "drain-zero" as const } };
-  const safe = computeSafeSpend(liveSafePlan);
+  // Use whichever method the user picked so the report matches what they see
+  // on screen. MC users get the slow but accurate gap (preferMcAccurate) since
+  // they're already in a slow context (printing).
+  const safe = computeSafeSpend(plan);
   const goal = plan.targetAnnualSpend ?? 0;
-  const gap = goal > 0 ? computeSavingsGap({ plan: liveSafePlan, safe, goalToday: goal }) : null;
+  const gap =
+    goal > 0
+      ? computeSavingsGap({
+          plan,
+          safe,
+          goalToday: goal,
+          preferMcAccurate: true,
+        })
+      : null;
 
   // Pick a sparse set of milestone rows: retirement, +5y, +10y, +15y, +20y, last.
   const milestones = pickMilestones(rows);
@@ -121,7 +129,7 @@ export function PrintSummary() {
       <Section title="Sustainability">
         <Grid cols={4}>
           <KV
-            label="Safe spend (today's $, drain-zero)"
+            label={`Safe spend (today's $, ${methodLabel(plan.safeSpend.method)})`}
             value={formatCurrency(safe.safeSpendToday, { whole: true })}
           />
           <KV
@@ -197,6 +205,12 @@ export function PrintSummary() {
       </footer>
     </div>
   );
+}
+
+function methodLabel(m: "monte-carlo" | "drain-zero" | "4pct"): string {
+  if (m === "monte-carlo") return "Monte Carlo";
+  if (m === "4pct") return "4% rule";
+  return "drain-zero";
 }
 
 type Row = ReturnType<typeof useProjection>[number];

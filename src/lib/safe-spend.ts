@@ -174,16 +174,117 @@ function bisectSpend(
   return lastPass;
 }
 
-/** Inflate every asset's starting balance by `factor`. Used for two-point linearization. */
-function planWithInflatedBalances(plan: Plan, factor: number): Plan {
+/**
+ * Add `extraAnnual` of contributions to the chosen asset, mirroring how the
+ * accumulation phase reads each asset type's contribution mechanism. Returns
+ * a cloned plan; does not mutate the input.
+ *
+ * For 401k-style accounts, extra is converted to additional `contributionPct`
+ * relative to the owner's CURRENT salary (slight approximation since salary
+ * grows over time, but stable enough for bisection).
+ */
+function planWithExtraContribution(
+  plan: Plan,
+  assetId: string | null,
+  extraAnnual: number,
+): Plan {
+  if (extraAnnual <= 0) return plan;
+
+  if (assetId === null) {
+    return {
+      ...plan,
+      assets: [
+        ...plan.assets,
+        {
+          id: "_synthetic_extra",
+          owner: "p1",
+          category: "brokerage",
+          balance: 0,
+          monthlyContribution: extraAnnual / 12,
+          costBasis: 0,
+          tier: { tier: "custom", customMean: 0.07, customStdev: 0.10 },
+        },
+      ],
+    };
+  }
+
+  const ownerSalary = (owner: "p1" | "p2" | "joint"): number => {
+    if (owner === "p2" && plan.profile.person2) return plan.profile.person2.currentSalary;
+    return plan.profile.person1.currentSalary;
+  };
+
   return {
     ...plan,
-    assets: plan.assets.map((a) =>
-      a.category === "real-estate"
-        ? { ...a, balance: a.balance * factor, marketValue: a.marketValue * factor }
-        : { ...a, balance: a.balance * factor },
-    ),
+    assets: plan.assets.map((a) => {
+      if (a.id !== assetId) return a;
+      switch (a.category) {
+        case "trad-401k":
+        case "roth-401k": {
+          const sal = ownerSalary(a.owner) || 1;
+          const extraPct = extraAnnual / sal;
+          return { ...a, contributionPct: (a.contributionPct ?? 0) + extraPct };
+        }
+        case "trad-ira":
+        case "roth-ira":
+        case "sep-ira":
+        case "hsa":
+          return { ...a, annualContribution: (a.annualContribution ?? 0) + extraAnnual };
+        case "brokerage":
+          return {
+            ...a,
+            monthlyContribution: (a.monthlyContribution ?? 0) + extraAnnual / 12,
+          };
+        default:
+          return a;
+      }
+    }),
   };
+}
+
+/**
+ * Bisect on extra annual contribution: smallest amount that makes the
+ * deterministic projection sustain `goalToday` base spend without shortfalls
+ * and with non-negative final estate.
+ *
+ * Uses drain-zero semantics regardless of the user's chosen safe-spend method
+ * because nesting MC inside a bisection would be prohibitively slow. The MC
+ * card still shows the MC safe-spend itself; only the gap-fill number is
+ * deterministic.
+ */
+function bisectExtraContribution(
+  plan: Plan,
+  goalToday: number,
+  assetId: string | null,
+): number {
+  const test = (extra: number): boolean => {
+    const planTested = planWithBaseSpend(
+      planWithExtraContribution(plan, assetId, extra),
+      goalToday,
+    );
+    const rows = projectPlan(planTested);
+    if (rows.length === 0) return true;
+    const last = rows[rows.length - 1];
+    if (last.estateValue < 0) return false;
+    return rows.every((r) => r.shortfall < 1);
+  };
+
+  if (test(0)) return 0;
+
+  let hi = Math.max(goalToday * 2, 50_000);
+  let attempts = 0;
+  while (!test(hi) && attempts < 8) {
+    hi *= 2;
+    attempts++;
+  }
+  if (!test(hi)) return hi;
+
+  let lo = 0;
+  for (let i = 0; i < 14; i++) {
+    const mid = (lo + hi) / 2;
+    if (test(mid)) hi = mid;
+    else lo = mid;
+  }
+  return hi;
 }
 
 /**
@@ -270,49 +371,38 @@ export function computeSavingsGap(args: {
 }): SavingsGapResult {
   const { plan, safe, goalToday } = args;
 
-  if (goalToday <= safe.safeSpendToday) {
-    return {
-      requiredAnnualContribution: 0,
-      portfolioGapNominal: 0,
-      assetReturn: 0,
-      assetId: null,
-      assetLabel: "—",
-    };
-  }
-
-  // Two-point linearization: safe-spend is approximately linear in portfolio when
-  // SS/healthcare/income are fixed. Probe a second point with inflated balances and
-  // derive the local slope (Δsafe / Δportfolio). The 4% rule slope is exactly 0.04;
-  // drain-zero / MC pick up the user's actual SS / income mix.
-  const inflated = computeSafeSpend(planWithInflatedBalances(plan, 1.5));
-  const dPort = inflated.portfolioAtRetirement - safe.portfolioAtRetirement;
-  const dSafe = inflated.safeSpendToday - safe.safeSpendToday;
-  // Slope $/$ — fall back to ratio if degenerate.
-  const slope =
-    dPort > 0 && dSafe > 0
-      ? dSafe / dPort
-      : safe.portfolioAtRetirement > 0
-        ? safe.safeSpendToday / safe.portfolioAtRetirement
-        : 0.04;
-
-  const portfolioNeededNominal =
-    safe.portfolioAtRetirement + (goalToday - safe.safeSpendToday) / slope;
-  const portfolioGapNominal = Math.max(0, portfolioNeededNominal - safe.portfolioAtRetirement);
-
   const assetId = plan.safeSpend.extraContribAssetId ?? null;
   const asset = assetId ? plan.assets.find((a) => a.id === assetId) ?? null : null;
   const assetReturn = asset ? preRetReturn(asset) : 0.07;
   const horizon = asset
     ? yearsToRetireForOwner(plan, asset.owner)
     : safe.yearsToRetirement;
+
+  if (goalToday <= safe.safeSpendToday) {
+    return {
+      requiredAnnualContribution: 0,
+      portfolioGapNominal: 0,
+      assetReturn,
+      assetId,
+      assetLabel: asset ? (asset.nickname ?? asset.category) : "default 7%",
+    };
+  }
+
+  // Direct bisection on the contribution amount: monotonic, no slope estimation,
+  // robust to the concave safe-spend-vs-portfolio curve. Uses deterministic
+  // (drain-zero) success criterion; MC users get the deterministic estimate
+  // alongside their MC-based safe-spend figure.
+  const requiredAnnualContribution = bisectExtraContribution(plan, goalToday, assetId);
+
+  // Back out the implied portfolio gap from the FV formula for display.
   const fv = fvAnnuityFactor(assetReturn, horizon);
-  const requiredAnnualContribution = fv > 0 ? portfolioGapNominal / fv : portfolioGapNominal;
+  const portfolioGapNominal = requiredAnnualContribution * fv;
 
   return {
     requiredAnnualContribution,
     portfolioGapNominal,
     assetReturn,
     assetId,
-    assetLabel: asset ? (asset.nickname ?? asset.category) : "no account selected",
+    assetLabel: asset ? (asset.nickname ?? asset.category) : "default 7%",
   };
 }

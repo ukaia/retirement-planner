@@ -6,6 +6,7 @@ export const SECTIONS = [
   { id: "healthcare", label: "Healthcare" },
   { id: "social-security", label: "Social Security" },
   { id: "results", label: "Results" },
+  { id: "calculations", label: "Calculations" },
   { id: "monte-carlo", label: "Monte Carlo" },
   { id: "sequence-risk", label: "Sequence Risk" },
   { id: "asset-location", label: "Asset Location" },

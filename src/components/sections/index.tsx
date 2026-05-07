@@ -5,6 +5,7 @@ import { Expenses } from "./Expenses";
 import { Healthcare } from "./Healthcare";
 import { SocialSecurity } from "./SocialSecurity";
 import { Results } from "./Results";
+import { Calculations } from "./Calculations";
 import { MonteCarlo } from "./MonteCarlo";
 import { Estate } from "./Estate";
 import { SequenceRisk } from "./SequenceRisk";
@@ -28,6 +29,8 @@ export function SectionRenderer({ id }: { id: SectionId }) {
       return <Income />;
     case "results":
       return <Results />;
+    case "calculations":
+      return <Calculations />;
     case "monte-carlo":
       return <MonteCarlo />;
     case "sequence-risk":

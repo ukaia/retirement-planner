@@ -29,6 +29,7 @@ export function SafeSpendCard() {
 
   // Auto-compute fast methods; gate MC behind a button.
   const [mcResult, setMcResult] = useState<SafeSpendResult | null>(null);
+  const [mcGap, setMcGap] = useState<ReturnType<typeof computeSavingsGap> | null>(null);
   const [mcRunning, setMcRunning] = useState(false);
   const mcRequestRef = useRef(0);
 
@@ -39,10 +40,12 @@ export function SafeSpendCard() {
 
   const result = config.method === "monte-carlo" ? mcResult : fastResult;
 
-  const gap = useMemo(() => {
+  const liveGap = useMemo(() => {
     if (!result || goal <= 0) return null;
     return computeSavingsGap({ plan, safe: result, goalToday: goal });
   }, [plan, result, goal]);
+
+  const gap = config.method === "monte-carlo" && mcGap ? mcGap : liveGap;
 
   const runMc = () => {
     const requestId = ++mcRequestRef.current;
@@ -52,7 +55,22 @@ export function SafeSpendCard() {
       try {
         const r = computeSafeSpend(plan);
         // Drop stale results: only commit if this is still the latest request.
-        if (mcRequestRef.current === requestId) setMcResult(r);
+        if (mcRequestRef.current === requestId) {
+          setMcResult(r);
+          // Now compute the MC-accurate gap (slow ~10-20s) so the savings number
+          // actually reflects the chosen method's threshold.
+          if (goal > 0) {
+            const g = computeSavingsGap({
+              plan,
+              safe: r,
+              goalToday: goal,
+              preferMcAccurate: true,
+            });
+            if (mcRequestRef.current === requestId) setMcGap(g);
+          } else {
+            setMcGap(null);
+          }
+        }
       } finally {
         if (mcRequestRef.current === requestId) setMcRunning(false);
       }
@@ -72,7 +90,10 @@ export function SafeSpendCard() {
               updatePlan((p) => {
                 p.safeSpend.method = v;
               });
-              if (v !== "monte-carlo") setMcResult(null);
+              if (v !== "monte-carlo") {
+                setMcResult(null);
+                setMcGap(null);
+              }
             }}
             options={METHOD_OPTIONS}
           />

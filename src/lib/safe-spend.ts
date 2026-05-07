@@ -156,18 +156,25 @@ function preRetReturn(asset: Asset): number {
 }
 
 /**
- * Deterministic: success when last estate ≥ 0 and no shortfall years.
+ * Deterministic: success when last estate ≥ 0 and CUMULATIVE shortfall is below
+ * a noise floor proportional to total target spend.
  *
- * The shortfall floor (`< 1`) tolerates floating-point noise — the iterative
- * tax/withdrawal solver can return shortfalls in the cents range when buckets
- * fully cover spend, and a strict `=== 0` check would reject those as failures.
+ * Per-row shortfalls of ~$1–$5 routinely come from the withdrawal solver's
+ * iterative basis-fraction math even when buckets fully cover spend. A per-row
+ * threshold (e.g. `< 1`) gets stuck at that noise floor and produces
+ * tier-insensitive bisection results. Comparing accumulated shortfall against
+ * 0.1% of total target spend keeps real depletion (which produces $thousands
+ * per year) detectable while ignoring solver noise.
  */
 function deterministicSuccess(plan: Plan): boolean {
   const rows = projectPlan(plan);
   if (rows.length === 0) return true;
   const last = rows[rows.length - 1];
   if (last.estateValue < 0) return false;
-  return rows.every((r) => r.shortfall < 1);
+  const totalShortfall = rows.reduce((s, r) => s + r.shortfall, 0);
+  const totalSpend = rows.reduce((s, r) => s + r.expensesTotal, 0);
+  const noiseFloor = Math.max(1000, totalSpend * 0.001);
+  return totalShortfall < noiseFloor;
 }
 
 /** Monte Carlo: success rate ≥ threshold. Uses a small sim count for speed. */
@@ -328,7 +335,10 @@ function bisectExtraContribution(
     if (rows.length === 0) return true;
     const last = rows[rows.length - 1];
     if (last.estateValue < 0) return false;
-    return rows.every((r) => r.shortfall < 1);
+    const totalShortfall = rows.reduce((s, r) => s + r.shortfall, 0);
+    const totalSpend = rows.reduce((s, r) => s + r.expensesTotal, 0);
+    const noiseFloor = Math.max(1000, totalSpend * 0.001);
+    return totalShortfall < noiseFloor;
   });
 }
 

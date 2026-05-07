@@ -225,28 +225,37 @@ export function SafeSpendCard() {
                   </div>
 
                   {gap && gap.assetId ? (
-                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-4 gap-3">
-                      <Stat
-                        label="Extra / yr"
-                        value={formatCurrency(gap.requiredAnnualContribution, {
-                          whole: true,
-                        })}
-                      />
-                      <Stat
-                        label="Extra / mo"
-                        value={formatCurrency(gap.requiredAnnualContribution / 12, {
-                          whole: true,
-                        })}
-                      />
-                      <Stat
-                        label="Portfolio gap"
-                        value={formatCompact(gap.portfolioGapNominal)}
-                      />
-                      <Stat
-                        label="Compounded at"
-                        value={`${formatPercent(gap.assetReturn)}`}
-                      />
-                    </div>
+                    !Number.isFinite(gap.requiredAnnualContribution) ? (
+                      <p className="mt-3 text-sm text-negative">
+                        Goal isn't reachable with any extra contribution to this
+                        account. Try lowering the goal, picking an account with
+                        more years to retirement, or switching to a less
+                        conservative method.
+                      </p>
+                    ) : (
+                      <div className="mt-3 grid grid-cols-1 sm:grid-cols-4 gap-3">
+                        <Stat
+                          label="Extra / yr"
+                          value={formatCurrency(gap.requiredAnnualContribution, {
+                            whole: true,
+                          })}
+                        />
+                        <Stat
+                          label="Extra / mo"
+                          value={formatCurrency(gap.requiredAnnualContribution / 12, {
+                            whole: true,
+                          })}
+                        />
+                        <Stat
+                          label="Portfolio gap"
+                          value={formatCompact(gap.portfolioGapNominal)}
+                        />
+                        <Stat
+                          label="Compounded at"
+                          value={`${formatPercent(gap.assetReturn)}`}
+                        />
+                      </div>
+                    )
                   ) : (
                     <p className="mt-3 text-xs text-muted">
                       Pick an account above to see the required extra contribution.

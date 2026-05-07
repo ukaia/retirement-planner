@@ -233,7 +233,11 @@ function planWithExtraContribution(
 ): Plan {
   if (extraAnnual <= 0) return plan;
 
-  if (assetId === null) {
+  // If the chosen asset id is missing or stale (asset deleted but id still in
+  // plan.safeSpend.extraContribAssetId), fall through to the synthetic path so
+  // the bisection can still credit the contribution somewhere.
+  const targetExists = assetId !== null && plan.assets.some((a) => a.id === assetId);
+  if (assetId === null || !targetExists) {
     return {
       ...plan,
       assets: [
@@ -309,7 +313,9 @@ function bisectContribGeneric(
     hi *= 2;
     attempts++;
   }
-  if (!probe(hi)) return hi;
+  // Goal is not reachable even with an absurdly large contribution — signal
+  // infeasibility rather than returning the maxed-out cap as a "real" answer.
+  if (!probe(hi)) return Infinity;
 
   let lo = 0;
   for (let i = 0; i < iterations; i++) {
@@ -456,8 +462,15 @@ export function computeSavingsGap(args: {
 }): SavingsGapResult {
   const { plan, safe, goalToday, preferMcAccurate } = args;
 
-  const assetId = plan.safeSpend.extraContribAssetId ?? null;
-  const asset = assetId ? plan.assets.find((a) => a.id === assetId) ?? null : null;
+  // Resolve the chosen contribution destination. If the saved id no longer
+  // matches any current asset (e.g. user deleted the account), normalize to
+  // `null` so the UI dropdown reads "no account selected" rather than carrying
+  // a stale id that silently uses the synthetic 7% default.
+  const rawAssetId = plan.safeSpend.extraContribAssetId ?? null;
+  const asset = rawAssetId
+    ? plan.assets.find((a) => a.id === rawAssetId) ?? null
+    : null;
+  const assetId = asset ? rawAssetId : null;
   const assetReturn = asset ? preRetReturn(asset) : 0.07;
   const horizon = asset
     ? yearsToRetireForOwner(plan, asset.owner)

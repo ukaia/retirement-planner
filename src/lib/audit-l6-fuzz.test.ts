@@ -142,14 +142,19 @@ describe("Layer 6: fuzz invariants (50 random plans)", () => {
     }
   });
 
-  test("savings gap is non-negative when goal exceeds safe", () => {
+  test("savings gap is non-negative when goal exceeds safe (Infinity allowed for infeasible goals)", () => {
     for (let seed = 1; seed <= 30; seed++) {
       const p = randomPlan(seed);
       const safe = computeSafeSpend(p);
-      const goal = safe.safeSpendToday * 2; // intentionally beyond reach
+      const goal = safe.safeSpendToday * 2;
       const gap = computeSavingsGap({ plan: p, safe, goalToday: goal });
       expect(gap.requiredAnnualContribution).toBeGreaterThanOrEqual(0);
-      expect(Number.isFinite(gap.requiredAnnualContribution)).toBe(true);
+      // Either a finite required contribution, or Infinity for a goal that
+      // can't be reached even with arbitrarily large contributions.
+      expect(
+        Number.isFinite(gap.requiredAnnualContribution) ||
+          gap.requiredAnnualContribution === Infinity,
+      ).toBe(true);
     }
   });
 

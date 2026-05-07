@@ -242,49 +242,82 @@ function planWithExtraContribution(
 }
 
 /**
- * Bisect on extra annual contribution: smallest amount that makes the
- * deterministic projection sustain `goalToday` base spend without shortfalls
- * and with non-negative final estate.
- *
- * Uses drain-zero semantics regardless of the user's chosen safe-spend method
- * because nesting MC inside a bisection would be prohibitively slow. The MC
- * card still shows the MC safe-spend itself; only the gap-fill number is
- * deterministic.
+ * Bisect on extra annual contribution: smallest amount that satisfies `test`.
+ * Caller chooses the test function: deterministic (drain-zero) for live updates,
+ * Monte Carlo for the explicit Calculate path.
+ */
+function bisectContribGeneric(
+  plan: Plan,
+  goalToday: number,
+  assetId: string | null,
+  test: (planWithExtra: Plan) => boolean,
+  iterations = 14,
+): number {
+  const probe = (extra: number) =>
+    test(
+      planWithBaseSpend(planWithExtraContribution(plan, assetId, extra), goalToday),
+    );
+
+  if (probe(0)) return 0;
+
+  let hi = Math.max(goalToday * 2, 50_000);
+  let attempts = 0;
+  while (!probe(hi) && attempts < 8) {
+    hi *= 2;
+    attempts++;
+  }
+  if (!probe(hi)) return hi;
+
+  let lo = 0;
+  for (let i = 0; i < iterations; i++) {
+    const mid = (lo + hi) / 2;
+    if (probe(mid)) hi = mid;
+    else lo = mid;
+  }
+  return hi;
+}
+
+/**
+ * Drain-zero bisection: smallest annual contribution that makes the deterministic
+ * projection sustain goalToday with no shortfalls and non-negative final estate.
+ * Fast (~75ms); used for live updates and as the gap calc for drain-zero method.
  */
 function bisectExtraContribution(
   plan: Plan,
   goalToday: number,
   assetId: string | null,
 ): number {
-  const test = (extra: number): boolean => {
-    const planTested = planWithBaseSpend(
-      planWithExtraContribution(plan, assetId, extra),
-      goalToday,
-    );
-    const rows = projectPlan(planTested);
+  return bisectContribGeneric(plan, goalToday, assetId, (p) => {
+    const rows = projectPlan(p);
     if (rows.length === 0) return true;
     const last = rows[rows.length - 1];
     if (last.estateValue < 0) return false;
     return rows.every((r) => r.shortfall < 1);
-  };
+  });
+}
 
-  if (test(0)) return 0;
-
-  let hi = Math.max(goalToday * 2, 50_000);
-  let attempts = 0;
-  while (!test(hi) && attempts < 8) {
-    hi *= 2;
-    attempts++;
-  }
-  if (!test(hi)) return hi;
-
-  let lo = 0;
-  for (let i = 0; i < 14; i++) {
-    const mid = (lo + hi) / 2;
-    if (test(mid)) hi = mid;
-    else lo = mid;
-  }
-  return hi;
+/**
+ * MC bisection: smallest annual contribution such that the simulated success
+ * rate at the user's threshold meets the bar at goalToday. Slow (~20s with
+ * 200 sims and 14 outer iterations); only triggered behind the Calculate button.
+ */
+function bisectExtraContributionMC(
+  plan: Plan,
+  goalToday: number,
+  assetId: string | null,
+  threshold: number,
+  simulations = 200,
+): number {
+  return bisectContribGeneric(
+    plan,
+    goalToday,
+    assetId,
+    (p) => {
+      const r = runMonteCarlo({ plan: p, simulations, seed: 0xc0ffee });
+      return r.successRate >= threshold;
+    },
+    10,
+  );
 }
 
 /**
@@ -368,8 +401,11 @@ export function computeSavingsGap(args: {
   plan: Plan;
   safe: SafeSpendResult;
   goalToday: number;
+  /** When true and method is monte-carlo, run the (slow) MC bisection instead of the
+   *  drain-zero approximation. Default false so live updates stay snappy. */
+  preferMcAccurate?: boolean;
 }): SavingsGapResult {
-  const { plan, safe, goalToday } = args;
+  const { plan, safe, goalToday, preferMcAccurate } = args;
 
   const assetId = plan.safeSpend.extraContribAssetId ?? null;
   const asset = assetId ? plan.assets.find((a) => a.id === assetId) ?? null : null;
@@ -377,6 +413,8 @@ export function computeSavingsGap(args: {
   const horizon = asset
     ? yearsToRetireForOwner(plan, asset.owner)
     : safe.yearsToRetirement;
+  const fv = fvAnnuityFactor(assetReturn, horizon);
+  const assetLabel = asset ? (asset.nickname ?? asset.category) : "default 7%";
 
   if (goalToday <= safe.safeSpendToday) {
     return {
@@ -384,25 +422,40 @@ export function computeSavingsGap(args: {
       portfolioGapNominal: 0,
       assetReturn,
       assetId,
-      assetLabel: asset ? (asset.nickname ?? asset.category) : "default 7%",
+      assetLabel,
     };
   }
 
-  // Direct bisection on the contribution amount: monotonic, no slope estimation,
-  // robust to the concave safe-spend-vs-portfolio curve. Uses deterministic
-  // (drain-zero) success criterion; MC users get the deterministic estimate
-  // alongside their MC-based safe-spend figure.
-  const requiredAnnualContribution = bisectExtraContribution(plan, goalToday, assetId);
+  let requiredAnnualContribution: number;
+  let portfolioGapNominal: number;
 
-  // Back out the implied portfolio gap from the FV formula for display.
-  const fv = fvAnnuityFactor(assetReturn, horizon);
-  const portfolioGapNominal = requiredAnnualContribution * fv;
+  if (plan.safeSpend.method === "4pct") {
+    // Analytic: invert safeNominal = port × 0.04 − avgHc → solve for port_needed.
+    const inflationFactor = Math.pow(1 + plan.profile.inflation, safe.yearsToRetirement);
+    const avgHc = averageHealthcareNominal(plan);
+    const portfolioNeeded = (goalToday * inflationFactor + avgHc) / 0.04;
+    portfolioGapNominal = Math.max(0, portfolioNeeded - safe.portfolioAtRetirement);
+    requiredAnnualContribution = fv > 0 ? portfolioGapNominal / fv : portfolioGapNominal;
+  } else if (plan.safeSpend.method === "monte-carlo" && preferMcAccurate) {
+    // Slow path: bisect with MC inner test. Runs only when user clicked Calculate.
+    requiredAnnualContribution = bisectExtraContributionMC(
+      plan,
+      goalToday,
+      assetId,
+      plan.safeSpend.mcThreshold,
+    );
+    portfolioGapNominal = requiredAnnualContribution * fv;
+  } else {
+    // drain-zero (and MC live-update fallback): direct deterministic bisection.
+    requiredAnnualContribution = bisectExtraContribution(plan, goalToday, assetId);
+    portfolioGapNominal = requiredAnnualContribution * fv;
+  }
 
   return {
     requiredAnnualContribution,
     portfolioGapNominal,
     assetReturn,
     assetId,
-    assetLabel: asset ? (asset.nickname ?? asset.category) : "default 7%",
+    assetLabel,
   };
 }

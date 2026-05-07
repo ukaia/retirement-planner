@@ -433,6 +433,7 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
       cola: SS.cola2026,
       isSurvivor: p1Survivor,
       deceasedBenefit: 0,
+      alreadyClaiming: plan.socialSecurity.person1.alreadyClaiming,
     });
     let ss2 = 0;
     if (p2Born !== null && plan.socialSecurity.person2) {
@@ -444,6 +445,7 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
         cola: SS.cola2026,
         isSurvivor: false,
         deceasedBenefit: 0,
+        alreadyClaiming: plan.socialSecurity.person2.alreadyClaiming,
       });
     }
 
@@ -734,8 +736,11 @@ function computeSsBenefit(args: {
   cola: number;
   isSurvivor: boolean;
   deceasedBenefit: number;
+  alreadyClaiming?: boolean;
 }): number {
-  if (args.currentAge < args.claimAge) return 0;
+  // alreadyClaiming overrides the "haven't reached claimAge" gate — the user is
+  // currently receiving benefits at the rate dictated by claimAge.
+  if (!args.alreadyClaiming && args.currentAge < args.claimAge) return 0;
   const monthlyAtClaim = benefitAtClaimAge({
     pia: args.person.pia,
     claimAgeMonths: args.claimAge * 12,

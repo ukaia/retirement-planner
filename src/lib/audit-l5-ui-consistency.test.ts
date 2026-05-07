@@ -12,7 +12,8 @@ import { accumulateToRetirement } from "./growth";
 import { accumulationTrajectory } from "./accumulation-trajectory";
 import { computeSafeSpend, computeSavingsGap } from "./safe-spend";
 import { effectiveReturns, projectPlan } from "./projection";
-import type { Plan, SafeSpendMethod, TierKey } from "../state/schema";
+import type { Plan, SafeSpendMethod } from "../state/schema";
+import type { TierKey } from "./tax-constants";
 
 function basePlan(method: SafeSpendMethod = "drain-zero"): Plan {
   return {

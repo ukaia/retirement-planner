@@ -2,10 +2,12 @@ import { useMemo } from "react";
 import { useStore } from "@/state/store";
 import { computeSafeSpend, computeSavingsGap, planWithBaseSpend } from "@/lib/safe-spend";
 import { effectiveReturns, projectPlan } from "@/lib/projection";
+import { toReal } from "@/lib/inflation";
 import { formatCompact, formatCurrency, formatPercent } from "@/lib/formatters";
 
 export function PrintSummary() {
   const plan = useStore((s) => s.plan);
+  const displayMode = useStore((s) => s.displayMode);
   const returns = effectiveReturns(plan);
 
   // Print uses the user's actual method (no MC→drain-zero proxy) so the report
@@ -117,6 +119,14 @@ export function PrintSummary() {
             value={formatCurrency(rows[0].expensesTotal / 12, { whole: true })}
           />
         </Grid>
+      </Section>
+
+      <Section
+        title={`Retirement income breakdown (year ${rows[0].year}, monthly${
+          displayMode === "real" ? ", today's $" : ""
+        })`}
+      >
+        <IncomeBreakdownGrid row={rows[0]} displayMode={displayMode} baseYear={plan.profile.taxYear} inflation={plan.profile.inflation} />
       </Section>
 
       <Section title="Portfolio (at retirement)">
@@ -247,6 +257,44 @@ function methodLabel(m: "monte-carlo" | "drain-zero" | "4pct"): string {
 }
 
 type Row = ReturnType<typeof projectPlan>[number];
+
+function IncomeBreakdownGrid({
+  row,
+  displayMode,
+  baseYear,
+  inflation,
+}: {
+  row: Row;
+  displayMode: "nominal" | "real";
+  baseYear: number;
+  inflation: number;
+}) {
+  // Print rows are nominal; apply real-$ adjustment here so the section honors
+  // the user's display toggle without affecting the rest of the report.
+  const adj = (n: number) =>
+    displayMode === "real" ? toReal(n, row.year, baseYear, inflation) : n;
+  const monthly = (annual: number) => formatCurrency(adj(annual) / 12, { whole: true });
+  const ssTotal = row.ssP1 + row.ssP2;
+  const otherIncome =
+    row.wages + row.pensions + row.annuities + row.rentalNet + row.partTime;
+  const noteIncome = row.installmentInterest + row.installmentPrincipal;
+  const withdrawals =
+    row.withdrawTaxable + row.withdrawTraditional + row.withdrawRoth + row.withdrawHsa;
+  const grossIncome = ssTotal + otherIncome + noteIncome + withdrawals;
+  return (
+    <Grid cols={4}>
+      <KV label="Social Security" value={monthly(ssTotal)} />
+      <KV label="Wages / pensions / rental" value={monthly(otherIncome)} />
+      {noteIncome > 0 ? (
+        <KV label="Seller-financed note P&I" value={monthly(noteIncome)} />
+      ) : null}
+      <KV label="Withdrawals from savings" value={monthly(withdrawals)} />
+      <KV label="Gross income" value={monthly(grossIncome)} />
+      <KV label="Tax" value={monthly(row.totalTax)} />
+      <KV label="Net spending" value={monthly(row.expensesTotal)} />
+    </Grid>
+  );
+}
 
 function pickMilestones(rows: Row[]): Row[] {
   if (rows.length <= 7) return rows;

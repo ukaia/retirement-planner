@@ -67,6 +67,8 @@ export function Results() {
         <Stat label="Years modeled" value={String(rows.length)} />
       </div>
 
+      <RetirementIncomeCard row={first} displayMode={displayMode} />
+
       <SafeSpendCard />
 
       <Card title="Expected portfolio returns">
@@ -204,6 +206,56 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: "ne
       <div className="text-xs text-muted">{label}</div>
       <div className={`num text-base mt-1 ${tone === "negative" ? "text-negative" : ""}`}>{value}</div>
     </div>
+  );
+}
+
+/** Year-1 retirement income breakdown by source, plus withdrawals and net spending.
+ *  Values arrive already in the user's display mode (nominal vs today's $) via
+ *  useDisplayProjection. */
+function RetirementIncomeCard({
+  row,
+  displayMode,
+}: {
+  row: ProjectionRow;
+  displayMode: "nominal" | "real";
+}) {
+  const ssTotal = row.ssP1 + row.ssP2;
+  const otherIncome =
+    row.wages +
+    row.pensions +
+    row.annuities +
+    row.rentalNet +
+    row.partTime;
+  const noteIncome = row.installmentInterest + row.installmentPrincipal;
+  const withdrawals =
+    row.withdrawTaxable +
+    row.withdrawTraditional +
+    row.withdrawRoth +
+    row.withdrawHsa;
+  const grossIncome = ssTotal + otherIncome + noteIncome + withdrawals;
+  const monthly = (annual: number) => formatCurrency(annual / 12, { whole: true });
+
+  return (
+    <Card
+      title={`Retirement income (year ${row.year})`}
+      subtitle={`Monthly $ ${displayMode === "real" ? "(today's $)" : "(nominal)"} covering year-1 spending. Withdrawals are sized so gross income — tax = expenses.`}
+    >
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Stat label="Social Security" value={monthly(ssTotal)} />
+        <Stat label="Wages / pensions / rental / etc." value={monthly(otherIncome)} />
+        {noteIncome > 0 ? (
+          <Stat label="Seller-financed note P&I" value={monthly(noteIncome)} />
+        ) : null}
+        <Stat label="Withdrawals from savings" value={monthly(withdrawals)} />
+        <Stat label="Gross income" value={monthly(grossIncome)} />
+        <Stat label="Tax" value={monthly(row.totalTax)} />
+        <Stat
+          label="Net spending"
+          value={monthly(row.expensesTotal)}
+          tone={row.shortfall > 0 ? "negative" : undefined}
+        />
+      </div>
+    </Card>
   );
 }
 

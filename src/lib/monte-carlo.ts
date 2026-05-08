@@ -189,7 +189,11 @@ export function runMonteCarlo(args: {
     finalEstates.push(path[path.length - 1]);
     let depletionAge: number | null = null;
     for (const r of rows) {
-      if (r.estateValue <= 0 || r.shortfall > 0) {
+      // Noise floor mirrors drain-zero (safe-spend.ts): tiny float-precision
+      // residuals from withdrawal gross-up iteration shouldn't count as a
+      // real shortfall and flip an otherwise-healthy sim to "failed".
+      const noiseFloor = Math.max(100, r.expensesTotal * 0.001);
+      if (r.estateValue <= 0 || r.shortfall > noiseFloor) {
         depletionAge = r.p1Age;
         break;
       }

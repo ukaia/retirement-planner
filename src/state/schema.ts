@@ -98,15 +98,21 @@ const realEstate = baseAsset.extend({
   monthlyRentIncome: z.number().min(0).default(0),
   monthlyRentExpense: z.number().min(0).default(0),
   actionAtRetirement: z
-    .enum(["hold", "liquidate", "liquidate-at-age", "sell-when-needed"])
+    .enum(["hold", "liquidate", "liquidate-at-age", "sell-when-needed", "seller-finance"])
     .default("hold"),
-  /** Age to liquidate when actionAtRetirement === "liquidate-at-age". */
+  /** Age to liquidate when actionAtRetirement === "liquidate-at-age" or "seller-finance". */
   liquidateAtAge: z.number().min(0).max(120).optional(),
   /**
    * Lower number = sold first when sell-when-needed fires. Defaults: rental 1, vacation 2, primary 3.
    * Primary residences should usually be the last resort.
    */
   sellPriority: z.number().int().min(1).max(99).optional(),
+  /** Seller-financing note term in years (used when actionAtRetirement === "seller-finance"). */
+  noteTermYears: z.number().min(1).max(40).optional(),
+  /** Seller-financing note interest rate (annual, decimal: 0.07 = 7%). */
+  noteRate: z.number().min(0).max(0.5).optional(),
+  /** Seller-financing buyer down-payment fraction (decimal: 0.2 = 20%). */
+  downPaymentPct: z.number().min(0).max(1).optional(),
 });
 
 const otherAsset = baseAsset.extend({

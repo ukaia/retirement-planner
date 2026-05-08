@@ -22,6 +22,7 @@ export function IncomeVsExpenseChart({ rows }: { rows: ProjectionRow[] }) {
         Pensions: r.pensions + r.annuities,
         Rental: r.rentalNet,
         "Part-time": r.partTime,
+        "Note P&I": r.installmentInterest + r.installmentPrincipal,
         Withdrawals:
           r.withdrawTaxable + r.withdrawTraditional + r.withdrawRoth + r.withdrawHsa,
         Expenses: -r.expensesTotal,
@@ -50,6 +51,7 @@ export function IncomeVsExpenseChart({ rows }: { rows: ProjectionRow[] }) {
           <Bar dataKey="Pensions" stackId="income" fill="#a78bfa" />
           <Bar dataKey="Rental" stackId="income" fill="#22c55e" />
           <Bar dataKey="Part-time" stackId="income" fill="#94a3b8" />
+          <Bar dataKey="Note P&I" stackId="income" fill="#f59e0b" />
           <Bar dataKey="Withdrawals" stackId="income" fill="#cbd5e1" />
           <Bar dataKey="Expenses" stackId="expense" fill="#dc2626" />
         </BarChart>

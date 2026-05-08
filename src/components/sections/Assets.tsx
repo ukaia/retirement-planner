@@ -368,6 +368,7 @@ function RealEstateFields({ asset, update }: { asset: Asset; update: (mut: (a: A
             { value: "liquidate", label: "Liquidate at retirement" },
             { value: "liquidate-at-age", label: "Liquidate at specific age" },
             { value: "sell-when-needed", label: "Sell when cash runs short" },
+            { value: "seller-finance", label: "Seller-finance (carry note)" },
           ]}
         />
       </Field>
@@ -384,6 +385,9 @@ function RealEstateFields({ asset, update }: { asset: Asset; update: (mut: (a: A
             }
           />
         </Field>
+      ) : null}
+      {asset.actionAtRetirement === "seller-finance" ? (
+        <SellerFinanceFields asset={asset} update={update} />
       ) : null}
       {asset.actionAtRetirement === "sell-when-needed" ? (
         <Field label="Sell priority (lower = sold first)">
@@ -441,6 +445,120 @@ function RealEstateFields({ asset, update }: { asset: Asset; update: (mut: (a: A
         </Field>
       ) : null}
     </FieldGrid>
+  );
+}
+
+function SellerFinanceFields({
+  asset,
+  update,
+}: {
+  asset: Asset;
+  update: (mut: (a: Asset) => void) => void;
+}) {
+  const plan = useStore((s) => s.plan);
+  if (asset.category !== "real-estate") return null;
+
+  const ownerBirth =
+    asset.owner === "p2" && plan.profile.person2
+      ? plan.profile.person2.birthYear
+      : plan.profile.person1.birthYear;
+  const currentAge = plan.profile.taxYear - ownerBirth;
+  const saleAge = asset.liquidateAtAge ?? 75;
+  const yearsUntilSale = Math.max(0, saleAge - currentAge);
+  const projectedSalePrice =
+    asset.marketValue * Math.pow(1 + asset.appreciation, yearsUntilSale);
+
+  const downPct = asset.downPaymentPct ?? 0.2;
+  const termYears = asset.noteTermYears ?? 30;
+  const annualRate = asset.noteRate ?? 0.07;
+  const downPayment = projectedSalePrice * downPct;
+  const financed = projectedSalePrice - downPayment;
+  const n = termYears * 12;
+  const r = annualRate / 12;
+  const monthlyPayment =
+    n === 0
+      ? 0
+      : r === 0
+        ? financed / n
+        : (financed * r) / (1 - Math.pow(1 + r, -n));
+
+  return (
+    <>
+      <Field label="Sale age">
+        <NumberInput
+          value={saleAge}
+          min={50}
+          max={120}
+          onChange={(v) =>
+            update((a) => {
+              if (a.category === "real-estate") a.liquidateAtAge = v;
+            })
+          }
+        />
+      </Field>
+      <Field label="Note term (years)">
+        <NumberInput
+          value={termYears}
+          min={1}
+          max={40}
+          onChange={(v) =>
+            update((a) => {
+              if (a.category === "real-estate") a.noteTermYears = v;
+            })
+          }
+        />
+      </Field>
+      <Field label="Note rate">
+        <NumberInput
+          asPercent
+          suffix="%"
+          value={annualRate}
+          onChange={(v) =>
+            update((a) => {
+              if (a.category === "real-estate") a.noteRate = v;
+            })
+          }
+        />
+      </Field>
+      <Field label="Down payment">
+        <NumberInput
+          asPercent
+          suffix="%"
+          value={downPct}
+          onChange={(v) =>
+            update((a) => {
+              if (a.category === "real-estate") a.downPaymentPct = v;
+            })
+          }
+        />
+      </Field>
+      <div className="sm:col-span-2 rounded-md border border-border p-3 text-xs">
+        <div className="text-subtle mb-1">
+          Projected sale price (auto, at age {saleAge}):
+          <span className="num text-default ml-2">
+            {formatCurrency(projectedSalePrice, { whole: true })}
+          </span>
+        </div>
+        <div className="text-subtle">
+          Down payment:
+          <span className="num text-default ml-2">
+            {formatCurrency(downPayment, { whole: true })}
+          </span>
+          <span className="ml-3">
+            Financed:
+            <span className="num text-default ml-2">
+              {formatCurrency(financed, { whole: true })}
+            </span>
+          </span>
+          <span className="ml-3">
+            Monthly P&I:
+            <span className="num text-default ml-2">
+              {formatCurrency(monthlyPayment, { whole: true })}
+            </span>
+          </span>
+        </div>
+      </div>
+    </>
   );
 }
 

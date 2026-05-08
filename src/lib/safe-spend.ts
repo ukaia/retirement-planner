@@ -116,6 +116,10 @@ function liquidPortfolioAtRetirement(plan: Plan): number {
   for (const a of plan.assets) {
     if (a.category !== "real-estate") continue;
     if (a.actionAtRetirement === "hold" || a.actionAtRetirement === "liquidate") continue;
+    // Seller-finance pays out as a multi-year P&I stream, not a lump sum, so it
+    // can't anchor a 4%-rule snapshot. The deterministic projection captures the
+    // cashflow correctly via drain-zero.
+    if (a.actionAtRetirement === "seller-finance") continue;
     // "liquidate-at-age" or "sell-when-needed": include net proceeds at retirement-year value.
     const value = accum.balanceByAsset[a.id] ?? 0;
     const netProceeds = Math.max(0, value - (a.mortgageBalance ?? 0));

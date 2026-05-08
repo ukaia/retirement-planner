@@ -26,6 +26,10 @@ export type ProjectionRow = {
   annuities: number;
   rentalNet: number;
   partTime: number;
+  /** Interest portion of seller-financed note P&I received this year (ordinary income). */
+  installmentInterest: number;
+  /** Principal portion of seller-financed note P&I received this year (cap-gain via installment GPR). */
+  installmentPrincipal: number;
   rmdTotal: number;
   rothConversion: number;
   // healthcare
@@ -275,6 +279,19 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
   // Liquidations on retirement year — adjust buckets.
   const liquidatedThisYear = new Set<string>();
 
+  // Active seller-financed notes. Persists across years until each note matures.
+  // Year-of-sale: only the down payment is recognized; the note begins amortizing the next year.
+  type ActiveNote = {
+    monthlyPayment: number;
+    balance: number;
+    rateMonthly: number;
+    monthsRemaining: number;
+    grossProfitRatio: number;
+    isIdaho: boolean;
+    createdYear: number;
+  };
+  const activeNotes = new Map<string, ActiveNote>();
+
   // Track MAGI history for IRMAA 2-yr lookback.
   const magiByYear: Record<number, number> = {};
 
@@ -395,7 +412,57 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
       return { gain, isIdaho: profile.state === "ID" };
     };
 
-    // Scheduled liquidations: at-retirement (legacy "liquidate") + new "liquidate-at-age".
+    // Helper: start a seller-financed sale. Owner takes back a note for the
+    // financed portion; only the down payment is recognized as principal in the
+    // sale year, with cap-gain via the installment-sale gross-profit ratio (§453).
+    // Returns the year-of-sale cap gain (after §121 if primary, applied via GPR).
+    const sellerFinanceOne = (
+      id: string,
+      re: { value: number; basis: number; remaining: typeof plan.assets[number] },
+    ): { gain: number; isIdaho: boolean } => {
+      const a = re.remaining as Extract<Asset, { category: "real-estate" }>;
+      const salePrice = re.value;
+      const downPct = a.downPaymentPct ?? 0.2;
+      const termYears = a.noteTermYears ?? 30;
+      const annualRate = a.noteRate ?? 0.07;
+      const downPayment = salePrice * downPct;
+      const financed = salePrice - downPayment;
+
+      let totalGain = salePrice - re.basis;
+      if (a.subtype === "primary") {
+        totalGain = Math.max(0, totalGain - SECTION_121_EXCLUSION[filingStatus]);
+      }
+      const gpr = salePrice > 0 ? totalGain / salePrice : 0;
+
+      // Net cash at close: down payment less mortgage payoff (may be negative
+      // when mortgage > down — seller covers gap from existing taxable cash).
+      const netCashAtClose = downPayment - a.mortgageBalance;
+      buckets.taxable.balance += netCashAtClose;
+      buckets.taxable.basis += netCashAtClose;
+
+      // Standard fixed-payment amortization. r=0 falls back to straight-line.
+      const n = termYears * 12;
+      const r = annualRate / 12;
+      const monthlyPayment =
+        r === 0 ? financed / n : (financed * r) / (1 - Math.pow(1 + r, -n));
+
+      activeNotes.set(id, {
+        monthlyPayment,
+        balance: financed,
+        rateMonthly: r,
+        monthsRemaining: n,
+        grossProfitRatio: gpr,
+        isIdaho: profile.state === "ID",
+        createdYear: year,
+      });
+
+      liquidatedThisYear.add(id);
+      re.value = 0;
+      // Cap gain in year-of-sale: down payment × GPR.
+      return { gain: downPayment * gpr, isIdaho: profile.state === "ID" };
+    };
+
+    // Scheduled liquidations: at-retirement (legacy "liquidate") + "liquidate-at-age" + "seller-finance".
     let liquidationGains = 0;
     let idahoPropertyGains = 0;
     for (const [id, re] of realEstate) {
@@ -410,11 +477,49 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
         a.actionAtRetirement === "liquidate-at-age" &&
         a.liquidateAtAge !== undefined &&
         ownerAge === a.liquidateAtAge;
+      const fireSellerFinance =
+        a.actionAtRetirement === "seller-finance" &&
+        a.liquidateAtAge !== undefined &&
+        ownerAge === a.liquidateAtAge;
       if (fireAtRetirement || fireAtAge) {
         const { gain, isIdaho } = liquidateOne(id, re);
         liquidationGains += gain;
         if (isIdaho) idahoPropertyGains += gain;
+      } else if (fireSellerFinance) {
+        const { gain, isIdaho } = sellerFinanceOne(id, re);
+        liquidationGains += gain;
+        if (isIdaho) idahoPropertyGains += gain;
       }
+    }
+
+    // Advance active seller-financed notes by 12 months (skip year-of-sale —
+    // only the down payment is recognized that year). Emits annual interest
+    // (ordinary) and principal (cap-gain at the note's GPR).
+    let installmentInterest = 0;
+    let installmentPrincipal = 0;
+    for (const [noteId, note] of activeNotes) {
+      if (note.createdYear === year) continue;
+      const months = Math.min(12, note.monthsRemaining);
+      let yrInterest = 0;
+      let yrPrincipal = 0;
+      for (let m = 0; m < months; m++) {
+        const interest = note.balance * note.rateMonthly;
+        const principal = Math.min(note.balance, note.monthlyPayment - interest);
+        yrInterest += interest;
+        yrPrincipal += principal;
+        note.balance -= principal;
+      }
+      note.monthsRemaining -= months;
+      installmentInterest += yrInterest;
+      installmentPrincipal += yrPrincipal;
+      // Principal hits taxable bucket as cash; basis bumped so re-sale of these
+      // dollars doesn't re-trigger gain (mirrors liquidateOne's treatment).
+      buckets.taxable.balance += yrPrincipal;
+      buckets.taxable.basis += yrPrincipal;
+      const yrGain = yrPrincipal * note.grossProfitRatio;
+      liquidationGains += yrGain;
+      if (note.isIdaho) idahoPropertyGains += yrGain;
+      if (note.monthsRemaining <= 0) activeNotes.delete(noteId);
     }
 
     // Wages (still working before retirement age).
@@ -631,7 +736,7 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
         targetNetSpend: adjustedSpend,
         income: {
           wages: taxableWages,
-          ordinaryIncome: pensions + annuities + rentalNet + partTime,
+          ordinaryIncome: pensions + annuities + rentalNet + partTime + installmentInterest,
           rmdIncome: rmdTotal,
           socialSecurity: ss1 + ss2,
           rothConversion,
@@ -682,6 +787,8 @@ export function projectPlan(plan: Plan, samples?: ReturnSamples): ProjectionRow[
       annuities,
       rentalNet,
       partTime,
+      installmentInterest,
+      installmentPrincipal,
       rmdTotal,
       rothConversion,
       acaCost,

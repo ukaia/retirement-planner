@@ -35,6 +35,8 @@ export function useDisplayProjection() {
       annuities: toReal(r.annuities, r.year, baseYear, inflation),
       rentalNet: toReal(r.rentalNet, r.year, baseYear, inflation),
       partTime: toReal(r.partTime, r.year, baseYear, inflation),
+      installmentInterest: toReal(r.installmentInterest, r.year, baseYear, inflation),
+      installmentPrincipal: toReal(r.installmentPrincipal, r.year, baseYear, inflation),
       rmdTotal: toReal(r.rmdTotal, r.year, baseYear, inflation),
       rothConversion: toReal(r.rothConversion, r.year, baseYear, inflation),
       acaCost: toReal(r.acaCost, r.year, baseYear, inflation),

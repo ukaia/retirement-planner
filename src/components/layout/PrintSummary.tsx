@@ -137,6 +137,16 @@ export function PrintSummary() {
             value={goal > 0 ? formatCurrency(goal, { whole: true }) : "—"}
           />
           <KV
+            label="Shortfall vs goal / yr"
+            value={
+              goal > 0
+                ? goal > safe.safeSpendToday
+                  ? formatCurrency(goal - safe.safeSpendToday, { whole: true })
+                  : "On track"
+                : "—"
+            }
+          />
+          <KV
             label="Extra savings / mo"
             value={
               gap

@@ -187,11 +187,17 @@ export function SafeSpendCard() {
           ) : (
             <>
               <p className="text-sm">
-                Shortfall:{" "}
+                Under {methodLabelShort(config.method)}, your plan sustains{" "}
+                <span className="num">
+                  {formatCurrency(result.safeSpendToday, { whole: true })}
+                </span>
+                /yr — that's{" "}
                 <span className="num text-negative">
                   {formatCurrency(goal - result.safeSpendToday, { whole: true })}
-                </span>{" "}
-                / yr (today's $).
+                </span>
+                /yr short of your{" "}
+                <span className="num">{formatCurrency(goal, { whole: true })}</span>{" "}
+                goal (today's $).
               </p>
 
               {eligible.length === 0 ? (
@@ -269,6 +275,12 @@ export function SafeSpendCard() {
       ) : null}
     </Card>
   );
+}
+
+function methodLabelShort(method: SafeSpendMethod): string {
+  if (method === "drain-zero") return "drain-to-zero";
+  if (method === "4pct") return "the 4% rule";
+  return "Monte Carlo";
 }
 
 function Stat({ label, value }: { label: string; value: string }) {

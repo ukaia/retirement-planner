@@ -15,4 +15,14 @@ export default defineConfig({
   worker: {
     format: "es",
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          recharts: ["recharts"],
+          comlink: ["comlink"],
+        },
+      },
+    },
+  },
 });

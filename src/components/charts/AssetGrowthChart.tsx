@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   Area,
   AreaChart,
@@ -11,15 +12,19 @@ import type { ProjectionRow } from "@/lib/projection";
 import { formatCompact } from "@/lib/formatters";
 
 export function AssetGrowthChart({ rows }: { rows: ProjectionRow[] }) {
-  const data = rows.map((r) => ({
-    year: r.year,
-    Taxable: r.taxableBalance,
-    Traditional: r.traditionalBalance,
-    Roth: r.rothBalance,
-    HSA: r.hsaBalance,
-    "Real estate": r.realEstateValue,
-    Other: r.otherAssetsValue,
-  }));
+  const data = useMemo(
+    () =>
+      rows.map((r) => ({
+        year: r.year,
+        Taxable: r.taxableBalance,
+        Traditional: r.traditionalBalance,
+        Roth: r.rothBalance,
+        HSA: r.hsaBalance,
+        "Real estate": r.realEstateValue,
+        Other: r.otherAssetsValue,
+      })),
+    [rows],
+  );
   return (
     <div className="h-72 w-full">
       <ResponsiveContainer>

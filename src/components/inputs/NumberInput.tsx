@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type Props = {
   value: number;
@@ -12,6 +12,8 @@ type Props = {
   /** display as percent (input shows 5, internally stores 0.05). */
   asPercent?: boolean;
   placeholder?: string;
+  /** trailing-debounce delay for committing typed values; flush on blur/Enter. */
+  debounceMs?: number;
 };
 
 export function NumberInput({
@@ -25,13 +27,50 @@ export function NumberInput({
   disabled,
   asPercent,
   placeholder,
+  debounceMs = 250,
 }: Props) {
   const display = asPercent ? Math.round(value * 10000) / 100 : value;
   const [text, setText] = useState<string>(String(display));
 
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const pendingRef = useRef<number | null>(null);
+  const timerRef = useRef<number | null>(null);
+
+  const flush = useCallback(() => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    if (pendingRef.current !== null) {
+      const v = pendingRef.current;
+      pendingRef.current = null;
+      onChangeRef.current(v);
+    }
+  }, []);
+
+  const schedule = useCallback(
+    (v: number) => {
+      pendingRef.current = v;
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+      if (debounceMs <= 0) {
+        flush();
+        return;
+      }
+      timerRef.current = window.setTimeout(flush, debounceMs);
+    },
+    [debounceMs, flush],
+  );
+
+  // Sync local text when external value changes — but only when no edit is pending,
+  // otherwise typing would be clobbered by the round-tripped store value.
   useEffect(() => {
+    if (pendingRef.current !== null) return;
     setText(String(asPercent ? Math.round(value * 10000) / 100 : value));
   }, [value, asPercent]);
+
+  // Flush any pending value on unmount so we never drop a user edit.
+  useEffect(() => () => flush(), [flush]);
 
   return (
     <div className="relative">
@@ -54,13 +93,16 @@ export function NumberInput({
           setText(e.target.value);
           const n = parseFloat(e.target.value);
           if (!isNaN(n)) {
-            const final = asPercent ? n / 100 : n;
-            onChange(final);
+            schedule(asPercent ? n / 100 : n);
           } else if (e.target.value === "") {
-            onChange(0);
+            schedule(0);
           }
         }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") flush();
+        }}
         onBlur={(e) => {
+          flush();
           if (e.target.value === "" || isNaN(parseFloat(e.target.value))) {
             const reset = asPercent ? Math.round(value * 10000) / 100 : value;
             setText(String(reset));

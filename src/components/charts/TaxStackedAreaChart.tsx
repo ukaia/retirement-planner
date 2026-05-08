@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   Area,
   AreaChart,
@@ -11,12 +12,16 @@ import type { ProjectionRow } from "@/lib/projection";
 import { formatCompact } from "@/lib/formatters";
 
 export function TaxStackedAreaChart({ rows }: { rows: ProjectionRow[] }) {
-  const data = rows.map((r) => ({
-    year: r.year,
-    Federal: r.federalTax,
-    State: r.stateTax,
-    IRMAA: r.irmaaSurcharge,
-  }));
+  const data = useMemo(
+    () =>
+      rows.map((r) => ({
+        year: r.year,
+        Federal: r.federalTax,
+        State: r.stateTax,
+        IRMAA: r.irmaaSurcharge,
+      })),
+    [rows],
+  );
   return (
     <div className="h-64 w-full">
       <ResponsiveContainer>

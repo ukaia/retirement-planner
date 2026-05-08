@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   Bar,
   BarChart,
@@ -12,16 +13,21 @@ import type { ProjectionRow } from "@/lib/projection";
 import { formatCompact } from "@/lib/formatters";
 
 export function IncomeVsExpenseChart({ rows }: { rows: ProjectionRow[] }) {
-  const data = rows.map((r) => ({
-    year: r.year,
-    Wages: r.wages,
-    SS: r.ssP1 + r.ssP2,
-    Pensions: r.pensions + r.annuities,
-    Rental: r.rentalNet,
-    "Part-time": r.partTime,
-    Withdrawals: r.withdrawTaxable + r.withdrawTraditional + r.withdrawRoth + r.withdrawHsa,
-    Expenses: -r.expensesTotal,
-  }));
+  const data = useMemo(
+    () =>
+      rows.map((r) => ({
+        year: r.year,
+        Wages: r.wages,
+        SS: r.ssP1 + r.ssP2,
+        Pensions: r.pensions + r.annuities,
+        Rental: r.rentalNet,
+        "Part-time": r.partTime,
+        Withdrawals:
+          r.withdrawTaxable + r.withdrawTraditional + r.withdrawRoth + r.withdrawHsa,
+        Expenses: -r.expensesTotal,
+      })),
+    [rows],
+  );
   return (
     <div className="h-72 w-full">
       <ResponsiveContainer>

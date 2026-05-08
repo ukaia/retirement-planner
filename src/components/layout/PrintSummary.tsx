@@ -109,7 +109,9 @@ export function PrintSummary() {
                 rows[0].pensions +
                 rows[0].annuities +
                 rows[0].rentalNet +
-                rows[0].partTime) /
+                rows[0].partTime +
+                rows[0].installmentInterest +
+                rows[0].installmentPrincipal) /
                 12,
               { whole: true },
             )}
@@ -218,7 +220,15 @@ export function PrintSummary() {
                 <Td>{r.p1Age}</Td>
                 <Td>
                   {formatCompact(
-                    r.wages + r.ssP1 + r.ssP2 + r.pensions + r.annuities + r.rentalNet + r.partTime,
+                    r.wages +
+                      r.ssP1 +
+                      r.ssP2 +
+                      r.pensions +
+                      r.annuities +
+                      r.rentalNet +
+                      r.partTime +
+                      r.installmentInterest +
+                      r.installmentPrincipal,
                   )}
                 </Td>
                 <Td>{formatCompact(r.expensesTotal)}</Td>

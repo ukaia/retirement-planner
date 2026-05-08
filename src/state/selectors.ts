@@ -145,7 +145,9 @@ export function useAtRetirementSummary() {
         first.pensions +
         first.annuities +
         first.rentalNet +
-        first.partTime) /
+        first.partTime +
+        first.installmentInterest +
+        first.installmentPrincipal) /
       12;
     const monthlyExpense = first.expensesTotal / 12;
     const totalAssets =

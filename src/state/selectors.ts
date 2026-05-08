@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { projectPlan } from "@/lib/projection";
+import { projectPlan, type ProjectionRow } from "@/lib/projection";
 import { toReal } from "@/lib/inflation";
-import { computeSafeSpend, computeSavingsGap } from "@/lib/safe-spend";
+import { computeSafeSpend, computeSavingsGap, planWithBaseSpend } from "@/lib/safe-spend";
 import { useStore } from "./store";
+import type { Plan } from "./schema";
 
 function useDebouncedValue<T>(value: T, delay: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -13,73 +14,42 @@ function useDebouncedValue<T>(value: T, delay: number): T {
   return debounced;
 }
 
+/** Raw projection from the user's plan exactly as typed.
+ *  Used by Estate, Warnings, and any consumer that wants the unmodified plan. */
 export function useProjection() {
   const plan = useStore((s) => s.plan);
   return useMemo(() => projectPlan(plan), [plan]);
 }
 
-export function useDisplayProjection() {
+/**
+ * Plan rescaled so plan.expenses sums to the chosen safe-spend method's
+ * sustainable amount. Drives every chart / table / summary on the Results,
+ * Calculations, and PrintSummary surfaces so they reflect the *selected*
+ * retirement-spending scenario rather than whatever raw expenses were typed.
+ *
+ * Performance: bisection (~75ms for drain-zero) is debounced 250ms after the
+ * NumberInput's own debounce, then memoized on the debounced plan reference.
+ * Monte-carlo falls back to drain-zero for live updates (matches SafeSpendCard).
+ * 4pct is analytic and effectively free.
+ */
+function useResultsBundle(): {
+  rows: ProjectionRow[];
+  scaledPlan: Plan;
+  safeSpendToday: number;
+  extraMonthlySavings: number | null;
+} {
   const plan = useStore((s) => s.plan);
-  const displayMode = useStore((s) => s.displayMode);
-  const rows = useProjection();
-  return useMemo(() => {
-    if (displayMode === "nominal") return rows;
-    const baseYear = plan.profile.taxYear;
-    const inflation = plan.profile.inflation;
-    return rows.map((r) => ({
-      ...r,
-      wages: toReal(r.wages, r.year, baseYear, inflation),
-      ssP1: toReal(r.ssP1, r.year, baseYear, inflation),
-      ssP2: toReal(r.ssP2, r.year, baseYear, inflation),
-      pensions: toReal(r.pensions, r.year, baseYear, inflation),
-      annuities: toReal(r.annuities, r.year, baseYear, inflation),
-      rentalNet: toReal(r.rentalNet, r.year, baseYear, inflation),
-      partTime: toReal(r.partTime, r.year, baseYear, inflation),
-      installmentInterest: toReal(r.installmentInterest, r.year, baseYear, inflation),
-      installmentPrincipal: toReal(r.installmentPrincipal, r.year, baseYear, inflation),
-      rmdTotal: toReal(r.rmdTotal, r.year, baseYear, inflation),
-      rothConversion: toReal(r.rothConversion, r.year, baseYear, inflation),
-      acaCost: toReal(r.acaCost, r.year, baseYear, inflation),
-      medicareCost: toReal(r.medicareCost, r.year, baseYear, inflation),
-      irmaaSurcharge: toReal(r.irmaaSurcharge, r.year, baseYear, inflation),
-      ltcExpected: toReal(r.ltcExpected, r.year, baseYear, inflation),
-      expensesBase: toReal(r.expensesBase, r.year, baseYear, inflation),
-      expensesHealthcare: toReal(r.expensesHealthcare, r.year, baseYear, inflation),
-      expensesTotal: toReal(r.expensesTotal, r.year, baseYear, inflation),
-      withdrawTaxable: toReal(r.withdrawTaxable, r.year, baseYear, inflation),
-      withdrawTraditional: toReal(r.withdrawTraditional, r.year, baseYear, inflation),
-      withdrawRoth: toReal(r.withdrawRoth, r.year, baseYear, inflation),
-      withdrawHsa: toReal(r.withdrawHsa, r.year, baseYear, inflation),
-      federalTax: toReal(r.federalTax, r.year, baseYear, inflation),
-      stateTax: toReal(r.stateTax, r.year, baseYear, inflation),
-      totalTax: toReal(r.totalTax, r.year, baseYear, inflation),
-      taxableBalance: toReal(r.taxableBalance, r.year, baseYear, inflation),
-      taxableBasis: toReal(r.taxableBasis, r.year, baseYear, inflation),
-      traditionalBalance: toReal(r.traditionalBalance, r.year, baseYear, inflation),
-      rothBalance: toReal(r.rothBalance, r.year, baseYear, inflation),
-      hsaBalance: toReal(r.hsaBalance, r.year, baseYear, inflation),
-      realEstateValue: toReal(r.realEstateValue, r.year, baseYear, inflation),
-      otherAssetsValue: toReal(r.otherAssetsValue, r.year, baseYear, inflation),
-      estateValue: toReal(r.estateValue, r.year, baseYear, inflation),
-      magi: toReal(r.magi, r.year, baseYear, inflation),
-    }));
-  }, [rows, plan, displayMode]);
-}
-
-export function useAtRetirementSummary() {
-  const plan = useStore((s) => s.plan);
-  const rows = useProjection();
-  // Heavy safe-spend bisection (~75ms) lags the live plan by 250ms so typing stays smooth.
   const debouncedPlan = useDebouncedValue(plan, 250);
-
-  const heavy = useMemo(() => {
+  return useMemo(() => {
     const userMethod = debouncedPlan.safeSpend.method;
     const liveMethod = userMethod === "monte-carlo" ? "drain-zero" : userMethod;
-    const livePlan = {
+    const livePlan: Plan = {
       ...debouncedPlan,
       safeSpend: { ...debouncedPlan.safeSpend, method: liveMethod },
     };
     const safe = computeSafeSpend(livePlan);
+    const scaledPlan = planWithBaseSpend(livePlan, safe.safeSpendToday);
+    const rows = projectPlan(scaledPlan);
     let extraMonthlySavings: number | null = null;
     if (debouncedPlan.targetAnnualSpend && debouncedPlan.targetAnnualSpend > 0) {
       const gap = computeSavingsGap({
@@ -89,8 +59,79 @@ export function useAtRetirementSummary() {
       });
       extraMonthlySavings = gap.requiredAnnualContribution / 12;
     }
-    return { safeSpendToday: safe.safeSpendToday, extraMonthlySavings };
+    return {
+      rows,
+      scaledPlan,
+      safeSpendToday: safe.safeSpendToday,
+      extraMonthlySavings,
+    };
   }, [debouncedPlan]);
+}
+
+/** Method-scaled projection rows (nominal). */
+export function useResultsProjection(): ProjectionRow[] {
+  return useResultsBundle().rows;
+}
+
+function toRealRow(r: ProjectionRow, baseYear: number, inflation: number): ProjectionRow {
+  return {
+    ...r,
+    wages: toReal(r.wages, r.year, baseYear, inflation),
+    ssP1: toReal(r.ssP1, r.year, baseYear, inflation),
+    ssP2: toReal(r.ssP2, r.year, baseYear, inflation),
+    pensions: toReal(r.pensions, r.year, baseYear, inflation),
+    annuities: toReal(r.annuities, r.year, baseYear, inflation),
+    rentalNet: toReal(r.rentalNet, r.year, baseYear, inflation),
+    partTime: toReal(r.partTime, r.year, baseYear, inflation),
+    installmentInterest: toReal(r.installmentInterest, r.year, baseYear, inflation),
+    installmentPrincipal: toReal(r.installmentPrincipal, r.year, baseYear, inflation),
+    rmdTotal: toReal(r.rmdTotal, r.year, baseYear, inflation),
+    rothConversion: toReal(r.rothConversion, r.year, baseYear, inflation),
+    acaCost: toReal(r.acaCost, r.year, baseYear, inflation),
+    medicareCost: toReal(r.medicareCost, r.year, baseYear, inflation),
+    irmaaSurcharge: toReal(r.irmaaSurcharge, r.year, baseYear, inflation),
+    ltcExpected: toReal(r.ltcExpected, r.year, baseYear, inflation),
+    expensesBase: toReal(r.expensesBase, r.year, baseYear, inflation),
+    expensesHealthcare: toReal(r.expensesHealthcare, r.year, baseYear, inflation),
+    expensesTotal: toReal(r.expensesTotal, r.year, baseYear, inflation),
+    withdrawTaxable: toReal(r.withdrawTaxable, r.year, baseYear, inflation),
+    withdrawTraditional: toReal(r.withdrawTraditional, r.year, baseYear, inflation),
+    withdrawRoth: toReal(r.withdrawRoth, r.year, baseYear, inflation),
+    withdrawHsa: toReal(r.withdrawHsa, r.year, baseYear, inflation),
+    federalTax: toReal(r.federalTax, r.year, baseYear, inflation),
+    stateTax: toReal(r.stateTax, r.year, baseYear, inflation),
+    totalTax: toReal(r.totalTax, r.year, baseYear, inflation),
+    taxableBalance: toReal(r.taxableBalance, r.year, baseYear, inflation),
+    taxableBasis: toReal(r.taxableBasis, r.year, baseYear, inflation),
+    traditionalBalance: toReal(r.traditionalBalance, r.year, baseYear, inflation),
+    rothBalance: toReal(r.rothBalance, r.year, baseYear, inflation),
+    hsaBalance: toReal(r.hsaBalance, r.year, baseYear, inflation),
+    realEstateValue: toReal(r.realEstateValue, r.year, baseYear, inflation),
+    otherAssetsValue: toReal(r.otherAssetsValue, r.year, baseYear, inflation),
+    estateValue: toReal(r.estateValue, r.year, baseYear, inflation),
+    magi: toReal(r.magi, r.year, baseYear, inflation),
+  };
+}
+
+/**
+ * Method-scaled projection in the user's chosen display mode (nominal vs today's $).
+ * This is what charts and the year-by-year table consume on the Results page.
+ */
+export function useDisplayProjection(): ProjectionRow[] {
+  const plan = useStore((s) => s.plan);
+  const displayMode = useStore((s) => s.displayMode);
+  const rows = useResultsProjection();
+  return useMemo(() => {
+    if (displayMode === "nominal") return rows;
+    const baseYear = plan.profile.taxYear;
+    const inflation = plan.profile.inflation;
+    return rows.map((r) => toRealRow(r, baseYear, inflation));
+  }, [rows, plan, displayMode]);
+}
+
+export function useAtRetirementSummary() {
+  const plan = useStore((s) => s.plan);
+  const { rows, safeSpendToday, extraMonthlySavings } = useResultsBundle();
 
   return useMemo(() => {
     if (rows.length === 0) {
@@ -136,9 +177,9 @@ export function useAtRetirementSummary() {
       finalEstate,
       yearsWithShortfall,
       goalToday,
-      extraMonthlySavings: heavy.extraMonthlySavings,
-      safeSpendToday: heavy.safeSpendToday,
+      extraMonthlySavings,
+      safeSpendToday,
       liveMethodLabel,
     };
-  }, [rows, plan, heavy]);
+  }, [rows, plan, safeSpendToday, extraMonthlySavings]);
 }

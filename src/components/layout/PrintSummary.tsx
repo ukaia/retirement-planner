@@ -1,16 +1,23 @@
+import { useMemo } from "react";
 import { useStore } from "@/state/store";
-import { useAtRetirementSummary, useProjection } from "@/state/selectors";
-import { computeSafeSpend, computeSavingsGap } from "@/lib/safe-spend";
-import { effectiveReturns } from "@/lib/projection";
+import { computeSafeSpend, computeSavingsGap, planWithBaseSpend } from "@/lib/safe-spend";
+import { effectiveReturns, projectPlan } from "@/lib/projection";
 import { formatCompact, formatCurrency, formatPercent } from "@/lib/formatters";
 
 export function PrintSummary() {
   const plan = useStore((s) => s.plan);
-  const summary = useAtRetirementSummary();
-  const rows = useProjection();
   const returns = effectiveReturns(plan);
 
-  if (!summary || rows.length === 0) {
+  // Print uses the user's actual method (no MC→drain-zero proxy) so the report
+  // is faithful to the chosen scenario. Acceptable to be slow — printing is a
+  // one-shot context.
+  const safe = useMemo(() => computeSafeSpend(plan), [plan]);
+  const rows = useMemo(
+    () => projectPlan(planWithBaseSpend(plan, safe.safeSpendToday)),
+    [plan, safe.safeSpendToday],
+  );
+
+  if (rows.length === 0) {
     return (
       <div className="print-only p-8 text-sm">
         <h1 className="text-xl font-semibold">Retirement Plan Summary</h1>
@@ -19,10 +26,6 @@ export function PrintSummary() {
     );
   }
 
-  // Use whichever method the user picked so the report matches what they see
-  // on screen. MC users get the slow but accurate gap (preferMcAccurate) since
-  // they're already in a slow context (printing).
-  const safe = computeSafeSpend(plan);
   const goal = plan.targetAnnualSpend ?? 0;
   const gap =
     goal > 0
@@ -82,16 +85,36 @@ export function PrintSummary() {
         <Grid cols={4}>
           <KV
             label="Year / age"
-            value={`${summary.yearOfRetirement} · age ${summary.ageAtRetirement}`}
+            value={`${rows[0].year} · age ${rows[0].p1Age}`}
           />
-          <KV label="Total assets" value={formatCompact(summary.totalAssets)} />
+          <KV
+            label="Total assets"
+            value={formatCompact(
+              rows[0].taxableBalance +
+                rows[0].traditionalBalance +
+                rows[0].rothBalance +
+                rows[0].hsaBalance +
+                rows[0].realEstateValue +
+                rows[0].otherAssetsValue,
+            )}
+          />
           <KV
             label="Monthly income"
-            value={formatCurrency(summary.monthlyIncome, { whole: true })}
+            value={formatCurrency(
+              (rows[0].wages +
+                rows[0].ssP1 +
+                rows[0].ssP2 +
+                rows[0].pensions +
+                rows[0].annuities +
+                rows[0].rentalNet +
+                rows[0].partTime) /
+                12,
+              { whole: true },
+            )}
           />
           <KV
             label="Monthly expense"
-            value={formatCurrency(summary.monthlyExpense, { whole: true })}
+            value={formatCurrency(rows[0].expensesTotal / 12, { whole: true })}
           />
         </Grid>
       </Section>
@@ -223,7 +246,7 @@ function methodLabel(m: "monte-carlo" | "drain-zero" | "4pct"): string {
   return "drain-zero";
 }
 
-type Row = ReturnType<typeof useProjection>[number];
+type Row = ReturnType<typeof projectPlan>[number];
 
 function pickMilestones(rows: Row[]): Row[] {
   if (rows.length <= 7) return rows;

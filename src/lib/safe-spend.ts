@@ -35,7 +35,7 @@ export type SavingsGapResult = {
  *
  * Falls back to a single synthetic category when the user has no expenses entered yet.
  */
-function planWithBaseSpend(plan: Plan, annualSpendToday: number): Plan {
+export function planWithBaseSpend(plan: Plan, annualSpendToday: number): Plan {
   const currentTotal = plan.expenses.reduce((s, e) => s + e.monthlyToday * 12, 0);
   if (currentTotal <= 0) {
     return {

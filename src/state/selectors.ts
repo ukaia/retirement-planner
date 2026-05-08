@@ -1,8 +1,17 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { projectPlan } from "@/lib/projection";
 import { toReal } from "@/lib/inflation";
 import { computeSafeSpend, computeSavingsGap } from "@/lib/safe-spend";
 import { useStore } from "./store";
+
+function useDebouncedValue<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return debounced;
+}
 
 export function useProjection() {
   const plan = useStore((s) => s.plan);
@@ -58,6 +67,29 @@ export function useDisplayProjection() {
 export function useAtRetirementSummary() {
   const plan = useStore((s) => s.plan);
   const rows = useProjection();
+  // Heavy safe-spend bisection (~75ms) lags the live plan by 250ms so typing stays smooth.
+  const debouncedPlan = useDebouncedValue(plan, 250);
+
+  const heavy = useMemo(() => {
+    const userMethod = debouncedPlan.safeSpend.method;
+    const liveMethod = userMethod === "monte-carlo" ? "drain-zero" : userMethod;
+    const livePlan = {
+      ...debouncedPlan,
+      safeSpend: { ...debouncedPlan.safeSpend, method: liveMethod },
+    };
+    const safe = computeSafeSpend(livePlan);
+    let extraMonthlySavings: number | null = null;
+    if (debouncedPlan.targetAnnualSpend && debouncedPlan.targetAnnualSpend > 0) {
+      const gap = computeSavingsGap({
+        plan: livePlan,
+        safe,
+        goalToday: debouncedPlan.targetAnnualSpend,
+      });
+      extraMonthlySavings = gap.requiredAnnualContribution / 12;
+    }
+    return { safeSpendToday: safe.safeSpendToday, extraMonthlySavings };
+  }, [debouncedPlan]);
+
   return useMemo(() => {
     if (rows.length === 0) {
       return null;
@@ -83,32 +115,14 @@ export function useAtRetirementSummary() {
     const finalEstate = rows[rows.length - 1].estateValue;
     const yearsWithShortfall = rows.filter((r) => r.shortfall > 0).length;
 
-    // Follow the user's chosen method when it can be evaluated quickly:
-    // - drain-zero  → bisection (~75ms), fine for live updates.
-    // - 4pct        → analytic, instant.
-    // - monte-carlo → too slow per keystroke; fall back to drain-zero and label.
-    let extraMonthlySavings: number | null = null;
-    let goalToday: number | null = null;
-    let safeSpendToday: number | null = null;
     const userMethod = plan.safeSpend.method;
-    const liveMethod = userMethod === "monte-carlo" ? "drain-zero" : userMethod;
     const liveMethodLabel = userMethod === "monte-carlo"
       ? "drain-zero proxy (MC needs Calculate)"
       : userMethod === "4pct"
         ? "4% rule"
         : "drain-zero";
-
-    if (plan.targetAnnualSpend && plan.targetAnnualSpend > 0) {
-      goalToday = plan.targetAnnualSpend;
-      const livePlan = { ...plan, safeSpend: { ...plan.safeSpend, method: liveMethod } };
-      const safe = computeSafeSpend(livePlan);
-      const gap = computeSavingsGap({ plan: livePlan, safe, goalToday });
-      extraMonthlySavings = gap.requiredAnnualContribution / 12;
-      safeSpendToday = safe.safeSpendToday;
-    } else {
-      const livePlan = { ...plan, safeSpend: { ...plan.safeSpend, method: liveMethod } };
-      safeSpendToday = computeSafeSpend(livePlan).safeSpendToday;
-    }
+    const goalToday =
+      plan.targetAnnualSpend && plan.targetAnnualSpend > 0 ? plan.targetAnnualSpend : null;
 
     return {
       yearOfRetirement: first.year,
@@ -120,9 +134,9 @@ export function useAtRetirementSummary() {
       finalEstate,
       yearsWithShortfall,
       goalToday,
-      extraMonthlySavings,
-      safeSpendToday,
+      extraMonthlySavings: heavy.extraMonthlySavings,
+      safeSpendToday: heavy.safeSpendToday,
       liveMethodLabel,
     };
-  }, [rows, plan]);
+  }, [rows, plan, heavy]);
 }

@@ -31,11 +31,22 @@ export function NumberInput({
 }: Props) {
   const display = asPercent ? Math.round(value * 10000) / 100 : value;
   const [text, setText] = useState<string>(String(display));
+  const [focused, setFocused] = useState(false);
 
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const pendingRef = useRef<number | null>(null);
   const timerRef = useRef<number | null>(null);
+
+  const clamp = useCallback(
+    (n: number) => {
+      let v = n;
+      if (typeof min === "number" && v < min) v = min;
+      if (typeof max === "number" && v > max) v = max;
+      return v;
+    },
+    [min, max],
+  );
 
   const flush = useCallback(() => {
     if (timerRef.current !== null) {
@@ -51,7 +62,7 @@ export function NumberInput({
 
   const schedule = useCallback(
     (v: number) => {
-      pendingRef.current = v;
+      pendingRef.current = clamp(v);
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
       if (debounceMs <= 0) {
         flush();
@@ -59,15 +70,15 @@ export function NumberInput({
       }
       timerRef.current = window.setTimeout(flush, debounceMs);
     },
-    [debounceMs, flush],
+    [debounceMs, flush, clamp],
   );
 
-  // Sync local text when external value changes — but only when no edit is pending,
-  // otherwise typing would be clobbered by the round-tripped store value.
+  // Sync local text when external value changes — but only when no edit is pending
+  // and the input isn't focused, otherwise mid-typing input (e.g. "5.") gets clobbered.
   useEffect(() => {
-    if (pendingRef.current !== null) return;
+    if (focused || pendingRef.current !== null) return;
     setText(String(asPercent ? Math.round(value * 10000) / 100 : value));
-  }, [value, asPercent]);
+  }, [value, asPercent, focused]);
 
   // Flush any pending value on unmount so we never drop a user edit.
   useEffect(() => () => flush(), [flush]);
@@ -89,6 +100,7 @@ export function NumberInput({
         step={step ?? (asPercent ? 0.1 : 1)}
         disabled={disabled}
         placeholder={placeholder}
+        onFocus={() => setFocused(true)}
         onChange={(e) => {
           setText(e.target.value);
           const n = parseFloat(e.target.value);
@@ -103,9 +115,18 @@ export function NumberInput({
         }}
         onBlur={(e) => {
           flush();
-          if (e.target.value === "" || isNaN(parseFloat(e.target.value))) {
+          setFocused(false);
+          const n = parseFloat(e.target.value);
+          if (e.target.value === "" || isNaN(n)) {
             const reset = asPercent ? Math.round(value * 10000) / 100 : value;
             setText(String(reset));
+          } else {
+            const clamped = clamp(asPercent ? n / 100 : n);
+            setText(
+              String(
+                asPercent ? Math.round(clamped * 10000) / 100 : clamped,
+              ),
+            );
           }
         }}
       />

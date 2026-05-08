@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   Area,
   AreaChart,
@@ -13,13 +14,15 @@ import type { MonteCarloResult } from "@/lib/monte-carlo";
 import { formatCompact } from "@/lib/formatters";
 
 export function MonteCarloFan({ result }: { result: MonteCarloResult }) {
-  const { years, bands } = result.percentiles;
-  const data = years.map((year, i) => ({
-    year,
-    "10–90 band": [bands.p10[i], bands.p90[i]],
-    "25–75 band": [bands.p25[i], bands.p75[i]],
-    Median: bands.p50[i],
-  }));
+  const data = useMemo(() => {
+    const { years, bands } = result.percentiles;
+    return years.map((year, i) => ({
+      year,
+      "10–90 band": [bands.p10[i], bands.p90[i]],
+      "25–75 band": [bands.p25[i], bands.p75[i]],
+      Median: bands.p50[i],
+    }));
+  }, [result]);
   return (
     <div className="h-72 w-full">
       <ResponsiveContainer>

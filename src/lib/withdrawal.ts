@@ -190,6 +190,40 @@ export function withdrawForSpend(args: {
     return draw;
   }
 
+  // Refund helpers: reverse a portion of an already-recorded draw. Used to
+  // correct gross-up overshoot — the draw estimator targets a net but the
+  // realized marginal rate may be lower than the approxRate, so the iteration
+  // can over-cover the spend target and leak cash that nothing actually pays for.
+  function refundToTaxable(amount: number): void {
+    if (amount <= 0 || withdrawnTaxable <= 0) return;
+    const refund = Math.min(amount, withdrawnTaxable);
+    // Refund proportionally by the realized gain fraction so basis tracking stays sane.
+    const gainFraction =
+      withdrawnTaxable > 0 ? withdrawnTaxableGains / withdrawnTaxable : 0;
+    const refundGain = refund * gainFraction;
+    const refundBasis = refund - refundGain;
+    buckets.taxable.balance += refund;
+    buckets.taxable.basis += refundBasis;
+    withdrawnTaxable -= refund;
+    withdrawnTaxableGains -= refundGain;
+    longTermGains -= refundGain;
+  }
+
+  function refundToTraditional(amount: number): void {
+    if (amount <= 0 || withdrawnTraditional <= 0) return;
+    const refund = Math.min(amount, withdrawnTraditional);
+    buckets.traditional += refund;
+    withdrawnTraditional -= refund;
+    ordinary -= refund;
+  }
+
+  function refundToRoth(amount: number): void {
+    if (amount <= 0 || withdrawnRoth <= 0) return;
+    const refund = Math.min(amount, withdrawnRoth);
+    buckets.roth += refund;
+    withdrawnRoth -= refund;
+  }
+
   function currentTax(): { fed: number; state: number; total: number } {
     const stateMix: StateIncomeMix = {
       wages: income.wages,
@@ -259,8 +293,39 @@ export function withdrawForSpend(args: {
       netCovered += netGained;
       remainingSpend = Math.max(0, targetNetSpend - netCovered);
 
+      // Correct gross-up overshoot. If approxRate over-estimated tax, the draw
+      // covered more net than needed — refund the surplus to the source bucket
+      // and recompute. Iterates a few times because each refund changes the tax
+      // bill, which in turn changes the precise overshoot.
+      let overshoot = netCovered - targetNetSpend;
+      for (let correction = 0; correction < 4 && overshoot > 0.5; correction++) {
+        const marginal =
+          drawn > 0 ? Math.min(0.99, Math.max(0, taxDelta / drawn)) : 0;
+        const refundGross = marginal >= 1 ? overshoot : overshoot / (1 - marginal);
+        const taxBeforeRefund = currentTax().total;
+        if (source === "taxable") refundToTaxable(refundGross);
+        else if (source === "traditional") refundToTraditional(refundGross);
+        else if (source === "roth") refundToRoth(refundGross);
+        const taxAfterRefund = currentTax().total;
+        const netRefunded = refundGross - (taxBeforeRefund - taxAfterRefund);
+        netCovered -= netRefunded;
+        overshoot = netCovered - targetNetSpend;
+      }
+      remainingSpend = Math.max(0, targetNetSpend - netCovered);
+
       if (Math.abs(netGained) < 0.5 || remainingSpend <= 0) break;
     }
+  }
+
+  // Forced-income surplus: when wages / SS / pensions / rental / RMDs exceed
+  // the spending target plus tax, the unspent net cash is real money the owner
+  // would normally save. Re-deposit it to the taxable bucket as already-taxed
+  // capital so the books balance and the surplus isn't lost mid-projection.
+  const surplus = netCovered - targetNetSpend;
+  if (surplus > 0.5) {
+    buckets.taxable.balance += surplus;
+    buckets.taxable.basis += surplus;
+    netCovered = targetNetSpend;
   }
 
   // Final tax for the year

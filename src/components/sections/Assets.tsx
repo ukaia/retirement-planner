@@ -282,6 +282,53 @@ function FinancialFields({ asset, update }: { asset: Asset; update: (mut: (a: As
               }
             />
           </Field>
+          <Field
+            label="Pre-retirement monthly withdrawal"
+            hint="For CoastFire / BaristaFire: draw down this account while still working. 0 disables."
+          >
+            <NumberInput
+              prefix="$"
+              value={asset.preRetMonthlyWithdrawal ?? 0}
+              min={0}
+              onChange={(v) =>
+                update((a) => {
+                  if (a.category === "brokerage") a.preRetMonthlyWithdrawal = v;
+                })
+              }
+            />
+          </Field>
+          {(asset.preRetMonthlyWithdrawal ?? 0) > 0 ? (
+            <>
+              <Field label="Withdrawals start age">
+                <NumberInput
+                  value={asset.preRetWithdrawalStartAge ?? 40}
+                  min={18}
+                  max={120}
+                  onChange={(v) =>
+                    update((a) => {
+                      if (a.category === "brokerage") a.preRetWithdrawalStartAge = v;
+                    })
+                  }
+                />
+              </Field>
+              <Field
+                label="Withdrawals end age (optional)"
+                hint="Leave at 0 to run until retirement."
+              >
+                <NumberInput
+                  value={asset.preRetWithdrawalEndAge ?? 0}
+                  min={0}
+                  max={120}
+                  onChange={(v) =>
+                    update((a) => {
+                      if (a.category === "brokerage")
+                        a.preRetWithdrawalEndAge = v > 0 ? v : undefined;
+                    })
+                  }
+                />
+              </Field>
+            </>
+          ) : null}
         </>
       ) : null}
     </FieldGrid>

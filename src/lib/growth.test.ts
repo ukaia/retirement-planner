@@ -169,4 +169,143 @@ describe("accumulateToRetirement", () => {
     // ~19 years at 8.12% with $14k contributions growing 3%/y → multiple hundreds of thousands.
     expect(r.balanceByAsset.k1).toBeGreaterThan(500_000);
   });
+
+  test("brokerage with pre-retirement monthly withdrawal grows less than the no-withdrawal baseline", () => {
+    const plan = basePlan();
+    plan.assets = [
+      {
+        id: "bro",
+        owner: "p1",
+        category: "brokerage",
+        balance: 1_000_000,
+        monthlyContribution: 0,
+        costBasis: 1_000_000,
+        tier: { tier: "balanced" },
+      },
+    ];
+    const baseline = accumulateToRetirement(plan).balanceByAsset.bro;
+
+    plan.assets = [
+      {
+        id: "bro",
+        owner: "p1",
+        category: "brokerage",
+        balance: 1_000_000,
+        monthlyContribution: 0,
+        costBasis: 1_000_000,
+        tier: { tier: "balanced" },
+        // CoastFire: pull $4k/mo from age 50 until retirement at 65.
+        preRetMonthlyWithdrawal: 4_000,
+        preRetWithdrawalStartAge: 50,
+      },
+    ];
+    const withWithdrawals = accumulateToRetirement(plan).balanceByAsset.bro;
+
+    expect(withWithdrawals).toBeLessThan(baseline);
+    // 15 years of $48k/yr (current dollars) plus lost compounding — easily $1M+ difference.
+    expect(baseline - withWithdrawals).toBeGreaterThan(700_000);
+  });
+
+  test("pre-retirement withdrawal honors start age (no effect before)", () => {
+    const plan = basePlan();
+    const start = 80; // age never reached before retirement at 65 → no withdrawal fires
+    plan.assets = [
+      {
+        id: "bro",
+        owner: "p1",
+        category: "brokerage",
+        balance: 500_000,
+        monthlyContribution: 0,
+        costBasis: 500_000,
+        tier: { tier: "balanced" },
+        preRetMonthlyWithdrawal: 5_000,
+        preRetWithdrawalStartAge: start,
+      },
+    ];
+    const r = accumulateToRetirement(plan);
+    // No withdrawals fired: balance matches the deterministic compounded baseline.
+    const expected = 500_000 * Math.pow(1 + 0.0812 / 12, 12 * 19);
+    expect(r.balanceByAsset.bro).toBeCloseTo(expected, -1);
+  });
+
+  test("pre-retirement withdrawal end age stops the drain early", () => {
+    const plan = basePlan();
+    // Pull $5k/mo from 50 to 55, then stop. After 55, compound resumes uninterrupted.
+    plan.assets = [
+      {
+        id: "bro",
+        owner: "p1",
+        category: "brokerage",
+        balance: 1_000_000,
+        monthlyContribution: 0,
+        costBasis: 1_000_000,
+        tier: { tier: "balanced" },
+        preRetMonthlyWithdrawal: 5_000,
+        preRetWithdrawalStartAge: 50,
+        preRetWithdrawalEndAge: 55,
+      },
+    ];
+    const ended = accumulateToRetirement(plan).balanceByAsset.bro;
+
+    // Same withdrawal but running all the way through retirement age (no end).
+    plan.assets = [
+      {
+        id: "bro",
+        owner: "p1",
+        category: "brokerage",
+        balance: 1_000_000,
+        monthlyContribution: 0,
+        costBasis: 1_000_000,
+        tier: { tier: "balanced" },
+        preRetMonthlyWithdrawal: 5_000,
+        preRetWithdrawalStartAge: 50,
+      },
+    ];
+    const never = accumulateToRetirement(plan).balanceByAsset.bro;
+
+    // Stopping at 55 vs running through 65 must end with more money.
+    expect(ended).toBeGreaterThan(never);
+  });
+
+  test("brokerage basis decreases proportionally when net withdrawal fires", () => {
+    const plan = basePlan();
+    plan.assets = [
+      {
+        id: "bro",
+        owner: "p1",
+        category: "brokerage",
+        balance: 1_000_000,
+        monthlyContribution: 0,
+        costBasis: 400_000, // 40% basis fraction
+        tier: { tier: "balanced" },
+        preRetMonthlyWithdrawal: 5_000,
+        preRetWithdrawalStartAge: 50,
+      },
+    ];
+    const r = accumulateToRetirement(plan);
+    // Basis should drop from $400k as withdrawals consume basis proportionally.
+    // Exact value depends on path; just assert it's strictly less than starting basis.
+    expect(r.basisByAsset.bro).toBeLessThan(400_000);
+    expect(r.basisByAsset.bro).toBeGreaterThanOrEqual(0);
+  });
+
+  test("pre-retirement withdrawal can drain bucket to zero, never negative", () => {
+    const plan = basePlan();
+    plan.assets = [
+      {
+        id: "bro",
+        owner: "p1",
+        category: "brokerage",
+        balance: 100_000,
+        monthlyContribution: 0,
+        costBasis: 100_000,
+        tier: { tier: "income-growth" },
+        preRetMonthlyWithdrawal: 5_000, // $60k/yr against $100k → drains in ~2 yrs
+        preRetWithdrawalStartAge: 46,
+      },
+    ];
+    const r = accumulateToRetirement(plan);
+    expect(r.balanceByAsset.bro).toBeGreaterThanOrEqual(0);
+    expect(r.balanceByAsset.bro).toBeLessThan(50_000);
+  });
 });

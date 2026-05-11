@@ -85,6 +85,15 @@ const brokerage = baseAsset.extend({
   costBasis: z.number().min(0).default(0),
   tier: tierConfig,
   retirementTier: tierConfig.optional(),
+  /**
+   * Monthly amount withdrawn from this brokerage before retirement (CoastFire /
+   * BaristaFire / lifestyle-funding while still working). Undefined = disabled.
+   */
+  preRetMonthlyWithdrawal: z.number().min(0).optional(),
+  /** Age (of asset owner) at which pre-retirement withdrawals begin. */
+  preRetWithdrawalStartAge: z.number().min(0).max(120).optional(),
+  /** Age (of asset owner) at which pre-retirement withdrawals end. Defaults to retirement age. */
+  preRetWithdrawalEndAge: z.number().min(0).max(120).optional(),
 });
 
 const realEstate = baseAsset.extend({

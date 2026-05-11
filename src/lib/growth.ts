@@ -23,6 +23,10 @@ export function compoundOneYear(args: {
   let bal = args.startBalance;
   for (let i = 0; i < 12; i++) {
     bal = bal * (1 + monthly) + m;
+    // Net negative flow (pre-retirement withdrawals exceed contributions plus
+    // growth) can drive balance below zero; clamp so the bucket can only drain
+    // to empty rather than going negative.
+    if (bal < 0) bal = 0;
   }
   return bal;
 }
@@ -135,19 +139,46 @@ export function accumulateToRetirement(plan: Plan): AccumulationResult {
         }
         case "brokerage": {
           annualContribution = (asset.monthlyContribution ?? 0) * 12;
+          // Pre-retirement withdrawals (CoastFire / BaristaFire / lifestyle
+          // funding while still working). Subtract from the net flow each
+          // year the owner is in the withdrawal window. End age defaults to
+          // retirement, so leaving it unset means "withdraw until I retire".
+          const wdMonthly = asset.preRetMonthlyWithdrawal ?? 0;
+          const wdStart = asset.preRetWithdrawalStartAge;
+          if (wdMonthly > 0 && wdStart !== undefined) {
+            const wdEnd = asset.preRetWithdrawalEndAge ?? Number.POSITIVE_INFINITY;
+            if (yearAge >= wdStart && yearAge < wdEnd) {
+              annualContribution -= wdMonthly * 12;
+            }
+          }
           break;
         }
       }
 
+      const balPreCompound = bal;
       bal = compoundOneYear({
         startBalance: bal,
         annualContribution,
         annualReturn,
       });
 
-      // Brokerage: contributions add to cost basis dollar-for-dollar.
+      // Brokerage: contributions add to cost basis dollar-for-dollar. When the
+      // net flow is negative (pre-retirement withdrawal exceeds contribution),
+      // the withdrawal consumes basis proportionally to the bucket's current
+      // basis fraction so the LTCG mix at retirement reflects reality.
       if (asset.category === "brokerage") {
-        basis += annualContribution;
+        if (annualContribution >= 0) {
+          basis += annualContribution;
+        } else {
+          const wd = -annualContribution;
+          // Approximate basis fraction using mid-year value (grown bucket pre-wd).
+          const grownBefore = balPreCompound * (1 + annualReturn);
+          if (grownBefore > 0) {
+            const basisFraction = Math.min(1, basis / grownBefore);
+            basis -= wd * basisFraction;
+          }
+          if (basis < 0) basis = 0;
+        }
       }
 
       yearAge += 1;
